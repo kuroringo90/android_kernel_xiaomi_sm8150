@@ -10,6 +10,7 @@ obj-vdso-s := note.o sigreturn.o
 obj-vdso-c := vgettimeofday.o
 
 # Build rules
+<<<<<<< HEAD
 targets := $(obj-vdso-s) $(obj-vdso-c) vdso.so vdso.so.dbg
 obj-vdso-s := $(addprefix $(obj)/, $(obj-vdso-s))
 obj-vdso-c := $(addprefix $(obj)/, $(obj-vdso-c))
@@ -30,6 +31,14 @@ CFLAGS_vgettimeofday.o += -mcmodel=tiny
 endif
 
 CFLAGS_REMOVE_vgettimeofday.o += $(CC_FLAGS_SCS)
+
+targets := $(obj-vdso) vdso.so vdso.so.dbg
+obj-vdso := $(addprefix $(obj)/, $(obj-vdso))
+
+ccflags-y := -shared -fno-common -fno-builtin
+ccflags-y += -nostdlib -Wl,-soname=linux-vdso.so.1 \
+		$(call cc-ldoption, -Wl$(comma)--hash-style=sysv)
+ccflags-y += $(DISABLE_LTO)
 
 # Disable gcov profiling for VDSO code
 GCOV_PROFILE := n
