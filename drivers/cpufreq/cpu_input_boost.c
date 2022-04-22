@@ -89,14 +89,7 @@ static void update_online_cpu_policy(void)
 
 static void __cpu_input_boost_kick(struct boost_drv *b)
 {
-<<<<<<< HEAD
 	if (test_bit(SCREEN_OFF, &b->state))
-=======
-        if (!test_bit(SCREEN_ON, &b->state) || active_mode() == 1)
-		return;
-
-	if (!input_boost_duration)
->>>>>>> b6da516be9a9... drivers/cpufreq: cpu_input_boost: Skip boosting when profiles is on level 1
 		return;
 
 	set_bit(INPUT_BOOST, &b->state);
@@ -118,11 +111,7 @@ static void __cpu_input_boost_kick_max(struct boost_drv *b,
 	unsigned long boost_jiffies = msecs_to_jiffies(duration_ms);
 	unsigned long curr_expires, new_expires;
 
-<<<<<<< HEAD
 	if (test_bit(SCREEN_OFF, &b->state))
-=======
-	if (!test_bit(SCREEN_ON, &b->state) || active_mode() == 1)
->>>>>>> b6da516be9a9... drivers/cpufreq: cpu_input_boost: Skip boosting when profiles is on level 1
 		return;
 
 	do {
