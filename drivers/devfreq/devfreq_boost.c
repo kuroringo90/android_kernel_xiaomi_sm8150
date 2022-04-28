@@ -308,6 +308,7 @@ static int __init devfreq_boost_init(void)
 			pr_err("Failed to create kthread, err: %d\n", ret);
 			goto stop_kthreads;
 		}
+		set_bit(SCREEN_OFF, &b->state);
 	}
 
 	devfreq_boost_input_handler.private = d;
