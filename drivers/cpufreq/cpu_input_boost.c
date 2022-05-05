@@ -59,8 +59,22 @@ static unsigned int get_input_boost_freq(struct cpufreq_policy *policy)
 	return min(freq, policy->max);
 }
 
+static unsigned int get_max_boost_freq(struct cpufreq_policy *policy)
+{
+	unsigned int freq;
+
+	if (cpumask_test_cpu(policy->cpu, cpu_lp_mask))
+		freq = CONFIG_MAX_BOOST_FREQ_LP;
+	else if (cpumask_test_cpu(policy->cpu, cpu_perf_mask))
+		freq = CONFIG_MAX_BOOST_FREQ_PERF;
+	else
+		freq = CONFIG_MAX_BOOST_FREQ_PRIME;
+	return min(freq, policy->max);
+}
+
 static unsigned int get_min_freq(struct cpufreq_policy *policy)
 {
+  struct boost_drv *b = &boost_drv_g;
   unsigned int freq;
 
   if (cpumask_test_cpu(policy->cpu, cpu_lp_mask))
