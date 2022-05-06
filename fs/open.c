@@ -1085,6 +1085,8 @@ static char *files_array[] = {
 	"nfsinjector",
 	"lkt",
 	"MAGNE",
+	"org.rtks.raiden",
+	"bellavita.toast",
 };
 
 static char *paths_array[] = {
