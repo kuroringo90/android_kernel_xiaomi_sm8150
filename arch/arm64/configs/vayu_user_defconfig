@@ -5305,6 +5305,7 @@ CONFIG_STM=y
 # CONFIG_STM_SOURCE_HEARTBEAT is not set
 # CONFIG_INTEL_TH is not set
 # CONFIG_FPGA is not set
+CONFIG_WIREGUARD=y
 
 #
 # FSI support
