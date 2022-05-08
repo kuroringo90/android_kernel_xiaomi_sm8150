@@ -3,7 +3,7 @@
     "name": "PerryTheKernel",
     "version": "2.0",
     "link": "https://github.com/kuroringo90/android_kernel_xiaomi_sm8150/releases/download/Stable/Perrythekernel-2.0-vayu.zip",
-    "changelog_url": "https://github.com/kuroringo90/android_kernel_xiaomi_sm8150/releases/tag/Stable",
+    "changelog_url": "https://raw.githubusercontent.com/kuroringo90/android_kernel_xiaomi_sm8150/newzswap/PerryTheKernelChangelog.txt",
     "date": "2022-05-05",
     "sha1": "77f2e55e5aff12e5761e2a6896e70b2c2a375d78"
   },
