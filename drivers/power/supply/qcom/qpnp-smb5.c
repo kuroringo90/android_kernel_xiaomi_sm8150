@@ -529,13 +529,13 @@ static int smb5_parse_dt(struct smb5 *chip)
 
 	rc = of_property_read_u32(node, "mi,ffc-low-tbat", &chg->ffc_low_tbat);
 	if (rc < 0) {
-		pr_info("use default ffc_low_tbat\n");
+		pr_debug("use default ffc_low_tbat\n");
 		chg->ffc_low_tbat = DEFAULT_FFC_LOW_TBAT;
 	}
 
 	rc = of_property_read_u32(node, "mi,ffc-high-tbat", &chg->ffc_high_tbat);
 	if (rc < 0) {
-		pr_info("use default ffc_high_tbat\n");
+		pr_debug("use default ffc_high_tbat\n");
 		chg->ffc_high_tbat = DEFAULT_FFC_HIGH_TBAT;
 	}
 
@@ -4073,7 +4073,7 @@ static int smb5_show_charger_status(struct smb5 *chip)
 	}
 	batt_charge_type = val.intval;
 
-	pr_info("SMB5 status - usb:present=%d type=%d batt:present = %d health = %d charge = %d\n",
+	pr_debug("SMB5 status - usb:present=%d type=%d batt:present = %d health = %d charge = %d\n",
 		usb_present, chg->real_charger_type,
 		batt_present, batt_health, batt_charge_type);
 	return rc;
@@ -4285,7 +4285,7 @@ static int smb5_probe(struct platform_device *pdev)
 	}
 	schedule_delayed_work(&chg->reg_work, 30 * HZ);
 
-	pr_info("QPNP SMB5 probed successfully\n");
+	pr_debug("QPNP SMB5 probed successfully\n");
 	smblib_support_liquid_feature(chg);
 
 	return rc;
