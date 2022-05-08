@@ -570,10 +570,8 @@ static void ln8000_irq_sleep(struct ln8000_info *info, int suspend)
        return;
 
     if (suspend) {
-       ln_info("disable/suspend IRQ\n");
        disable_irq(info->client->irq);
     } else {
-       ln_info("enable/resume IRQ\n");
        enable_irq(info->client->irq);
     }
 }
@@ -703,7 +701,6 @@ static int ln8000_init_device(struct ln8000_info *info)
 
     ln8000_print_regmap(info);
 
-    ln_info(" done.\n");
 
     return 0;
 }
