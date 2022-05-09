@@ -433,17 +433,17 @@ static void get_config_work(struct work_struct *work)
 			chip->step_chg_config->fcc_cfg[i].high_threshold,
 			chip->step_chg_config->fcc_cfg[i].value);
 	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++)
-		pr_info("jeita-fcc-cfg: %ddecidegree ~ %ddecidegre, %duA\n",
+		pr_debug("jeita-fcc-cfg: %ddecidegree ~ %ddecidegre, %duA\n",
 			chip->jeita_fcc_config->fcc_cfg[i].low_threshold,
 			chip->jeita_fcc_config->fcc_cfg[i].high_threshold,
 			chip->jeita_fcc_config->fcc_cfg[i].value);
 	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++)
-		pr_info("jeita-fv-cfg: %ddecidegree ~ %ddecidegre, %duV\n",
+		pr_debug("jeita-fv-cfg: %ddecidegree ~ %ddecidegre, %duV\n",
 			chip->jeita_fv_config->fv_cfg[i].low_threshold,
 			chip->jeita_fv_config->fv_cfg[i].high_threshold,
 			chip->jeita_fv_config->fv_cfg[i].value);
 	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++)
-		pr_info("dynamic-fv-cfg: %d(count) ~ %d(count), %duV\n",
+		pr_debug("dynamic-fv-cfg: %d(count) ~ %d(count), %duV\n",
 			chip->dynamic_fv_config->fv_cfg[i].low_threshold,
 			chip->dynamic_fv_config->fv_cfg[i].high_threshold,
 			chip->dynamic_fv_config->fv_cfg[i].value);
@@ -878,12 +878,12 @@ static int handle_jeita(struct step_chg_info *chip)
 		return rc;
 	}
 	batt_soc = pval.intval;
-	pr_info("%s:batt_soc=%d\n", __func__, batt_soc);
+	pr_debug("%s:batt_soc=%d\n", __func__, batt_soc);
 	rc = power_supply_get_property(chip->bms_psy,
 			POWER_SUPPLY_PROP_FASTCHARGE_MODE, &pval);
-	pr_err("%s:fastcharge_mode=%d\n", __func__, pval.intval);
+	pr_debug("%s:fastcharge_mode=%d\n", __func__, pval.intval);
 	if (rc < 0) {
-		pr_err("Couldn't read fastcharge mode fail rc=%d\n", rc);
+		pr_debug("Couldn't read fastcharge mode fail rc=%d\n", rc);
 		return rc;
 	}
 	if (pval.intval) {
@@ -979,7 +979,7 @@ static int handle_jeita(struct step_chg_info *chip)
 		goto set_jeita_fv;
 	}
 
-	pr_info("%s = %d FCC = %duA FV = %duV\n",
+	pr_debug("%s = %d FCC = %duA FV = %duV\n",
 		chip->jeita_fcc_config->param.prop_name, pval.intval, fcc_ua, fv_uv);
 	/*
 	 * Suspend USB input path if battery voltage is above
@@ -1018,7 +1018,7 @@ static int handle_jeita(struct step_chg_info *chip)
 					vote(chip->usb_icl_votable, JEITA_VOTER, false, 0);
 				}
 			} else {
-				pr_info("curr_vbat_uv = %duV,FCC =%duA,FV = %duV\n",curr_vbat_uv, fcc_ua, fv_uv);
+				pr_debug("curr_vbat_uv = %duV,FCC =%duA,FV = %duV\n",curr_vbat_uv, fcc_ua, fv_uv);
 				if (curr_vbat_uv > fv_uv + JEITA_SIX_PIN_BATT_HYST_UV) {
 					if (pval.intval == POWER_SUPPLY_CHARGE_TYPE_TAPER && fv_uv == WARM_VFLOAT_UV)
 						vote(chip->usb_icl_votable, JEITA_VOTER, true, 0);
