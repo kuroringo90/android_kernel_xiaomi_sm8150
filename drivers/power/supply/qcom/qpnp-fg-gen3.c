@@ -2562,10 +2562,10 @@ static void status_change_work(struct work_struct *work)
 			&prop);
 	rc = fg_config_esr_sw(fg);
 	if (rc < 0)
-		pr_err("Failed to config SW ESR rc=%d\n", rc);
+		pr_debug("Failed to config SW ESR rc=%d\n", rc);
 
 	if (rc < 0) {
-		pr_err("Error in getting charging status, rc=%d\n", rc);
+		pr_debug("Error in getting charging status, rc=%d\n", rc);
 		goto out;
 	}
 
@@ -2573,7 +2573,7 @@ static void status_change_work(struct work_struct *work)
 	rc = power_supply_get_property(fg->batt_psy,
 			POWER_SUPPLY_PROP_CHARGE_TYPE, &prop);
 	if (rc < 0) {
-		pr_err("Error in getting charge type, rc=%d\n", rc);
+		pr_debug("Error in getting charge type, rc=%d\n", rc);
 		goto out;
 	}
 
@@ -2581,7 +2581,7 @@ static void status_change_work(struct work_struct *work)
 	rc = power_supply_get_property(fg->batt_psy,
 			POWER_SUPPLY_PROP_CHARGE_DONE, &prop);
 	if (rc < 0) {
-		pr_err("Error in getting charge_done, rc=%d\n", rc);
+		pr_debug("Error in getting charge_done, rc=%d\n", rc);
 		goto out;
 	}
 
@@ -2591,34 +2591,34 @@ static void status_change_work(struct work_struct *work)
 
 	rc = fg_charge_full_update(fg);
 	if (rc < 0)
-		pr_err("Error in charge_full_update, rc=%d\n", rc);
+		pr_debug("Error in charge_full_update, rc=%d\n", rc);
 
 	rc = fg_adjust_recharge_soc(fg);
 	if (rc < 0)
-		pr_err("Error in adjusting recharge_soc, rc=%d\n", rc);
+		pr_debug("Error in adjusting recharge_soc, rc=%d\n", rc);
 
 	rc = fg_adjust_recharge_voltage(fg);
 	if (rc < 0)
-		pr_err("Error in adjusting recharge_voltage, rc=%d\n", rc);
+		pr_debug("Error in adjusting recharge_voltage, rc=%d\n", rc);
 
 	rc = fg_adjust_ki_coeff_dischg(fg);
 	if (rc < 0)
-		pr_err("Error in adjusting ki_coeff_dischg, rc=%d\n", rc);
+		pr_debug("Error in adjusting ki_coeff_dischg, rc=%d\n", rc);
 
 	rc = fg_esr_fcc_config(fg);
 	if (rc < 0)
-		pr_err("Error in adjusting FCC for ESR, rc=%d\n", rc);
+		pr_debug("Error in adjusting FCC for ESR, rc=%d\n", rc);
 
 	rc = fg_get_battery_temp(fg, &batt_temp);
 	if (!rc) {
 		rc = fg_slope_limit_config(fg, batt_temp);
 		if (rc < 0)
-			pr_err("Error in configuring slope limiter rc:%d\n",
+			pr_debug("Error in configuring slope limiter rc:%d\n",
 				rc);
 
 		rc = fg_adjust_ki_coeff_full_soc(fg, batt_temp);
 		if (rc < 0)
-			pr_err("Error in configuring ki_coeff_full_soc rc:%d\n",
+			pr_debug("Error in configuring ki_coeff_full_soc rc:%d\n",
 				rc);
 	}
 
@@ -2644,7 +2644,7 @@ static int fg_bp_params_config(struct fg_dev *fg)
 			fg->sp[FG_SRAM_FLOAT_VOLT].addr_byte, &buf,
 			fg->sp[FG_SRAM_FLOAT_VOLT].len, FG_IMA_DEFAULT);
 		if (rc < 0) {
-			pr_err("Error in writing float_volt, rc=%d\n", rc);
+			pr_debug("Error in writing float_volt, rc=%d\n", rc);
 			return rc;
 		}
 	}
@@ -2673,7 +2673,7 @@ static bool is_profile_load_required(struct fg_dev *fg)
 	rc = fg_sram_read(fg, PROFILE_INTEGRITY_WORD,
 			PROFILE_INTEGRITY_OFFSET, &val, 1, FG_IMA_DEFAULT);
 	if (rc < 0) {
-		pr_err("failed to read profile integrity rc=%d\n", rc);
+		pr_debug("failed to read profile integrity rc=%d\n", rc);
 		return false;
 	}
 
@@ -2694,7 +2694,7 @@ static bool is_profile_load_required(struct fg_dev *fg)
 		rc = fg_sram_read(fg, PROFILE_LOAD_WORD, PROFILE_LOAD_OFFSET,
 				buf, PROFILE_COMP_LEN, FG_IMA_DEFAULT);
 		if (rc < 0) {
-			pr_err("Error in reading battery profile, rc:%d\n", rc);
+			pr_debug("Error in reading battery profile, rc:%d\n", rc);
 			fg->profile_load_status = PROFILE_SKIPPED;
 			return false;
 		}
@@ -2741,7 +2741,7 @@ static void fg_update_batt_profile(struct fg_dev *fg)
 	rc = fg_sram_read(fg, PROFILE_INTEGRITY_WORD,
 			SW_CONFIG_OFFSET, &val, 1, FG_IMA_DEFAULT);
 	if (rc < 0) {
-		pr_err("Error in reading SW_CONFIG_OFFSET, rc=%d\n", rc);
+		pr_debug("Error in reading SW_CONFIG_OFFSET, rc=%d\n", rc);
 		return;
 	}
 
@@ -2758,7 +2758,7 @@ static void fg_update_batt_profile(struct fg_dev *fg)
 	rc = fg_sram_read(fg, ESR_RSLOW_CHG_WORD,
 			ESR_RSLOW_CHG_OFFSET, &val, 1, FG_IMA_DEFAULT);
 	if (rc < 0) {
-		pr_err("Error in reading ESR_RSLOW_CHG_OFFSET, rc=%d\n", rc);
+		pr_debug("Error in reading ESR_RSLOW_CHG_OFFSET, rc=%d\n", rc);
 		return;
 	}
 	offset = (ESR_RSLOW_CHG_WORD - PROFILE_LOAD_WORD) * 4
@@ -2768,7 +2768,7 @@ static void fg_update_batt_profile(struct fg_dev *fg)
 	rc = fg_sram_read(fg, ESR_RSLOW_DISCHG_WORD,
 			ESR_RSLOW_DISCHG_OFFSET, &val, 1, FG_IMA_DEFAULT);
 	if (rc < 0) {
-		pr_err("Error in reading ESR_RSLOW_DISCHG_OFFSET, rc=%d\n", rc);
+		pr_debug("Error in reading ESR_RSLOW_DISCHG_OFFSET, rc=%d\n", rc);
 		return;
 	}
 	offset = (ESR_RSLOW_DISCHG_WORD - PROFILE_LOAD_WORD) * 4
@@ -2784,7 +2784,7 @@ static void clear_battery_profile(struct fg_dev *fg)
 	rc = fg_sram_write(fg, PROFILE_INTEGRITY_WORD,
 			PROFILE_INTEGRITY_OFFSET, &val, 1, FG_IMA_DEFAULT);
 	if (rc < 0)
-		pr_err("failed to write profile integrity rc=%d\n", rc);
+		pr_debug("failed to write profile integrity rc=%d\n", rc);
 }
 
 static void pl_enable_work(struct work_struct *work)
@@ -2812,14 +2812,14 @@ static void profile_load_work(struct work_struct *work)
 
 	rc = fg_get_batt_id(fg);
 	if (rc < 0) {
-		pr_err("Error in getting battery id, rc:%d\n", rc);
+		pr_debug("Error in getting battery id, rc:%d\n", rc);
 		goto out;
 	}
 
 	rc = fg_get_batt_profile(fg);
 	if (rc < 0) {
 		fg->profile_load_status = PROFILE_MISSING;
-		pr_warn("profile for batt_id=%dKOhms not found..using OTP, rc:%d\n",
+		pr_debug("profile for batt_id=%dKOhms not found..using OTP, rc:%d\n",
 			fg->batt_id_ohms / 1000, rc);
 		goto out;
 	}
@@ -2841,7 +2841,7 @@ static void profile_load_work(struct work_struct *work)
 	fg_dbg(fg, FG_STATUS, "profile loading started\n");
 	rc = fg_masked_write(fg, BATT_SOC_RESTART(fg), RESTART_GO_BIT, 0);
 	if (rc < 0) {
-		pr_err("Error in writing to %04x, rc=%d\n",
+		pr_debug("Error in writing to %04x, rc=%d\n",
 			BATT_SOC_RESTART(fg), rc);
 		goto out;
 	}
@@ -2850,7 +2850,7 @@ static void profile_load_work(struct work_struct *work)
 	rc = fg_sram_write(fg, PROFILE_LOAD_WORD, PROFILE_LOAD_OFFSET,
 			chip->batt_profile, PROFILE_LEN, FG_IMA_ATOMIC);
 	if (rc < 0) {
-		pr_err("Error in writing battery profile, rc:%d\n", rc);
+		pr_debug("Error in writing battery profile, rc:%d\n", rc);
 		goto out;
 	}
 
