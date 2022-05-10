@@ -500,7 +500,7 @@
 	};
 
 	CLUSTER_COST_0: cluster-cost0 {
-		busy-cost-data =<
+		busy-cost-data = <
 			576000    4
 			1036800    8
 			1785600   17
