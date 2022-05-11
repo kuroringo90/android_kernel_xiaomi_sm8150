@@ -236,7 +236,7 @@ int lpm_get_latency(struct latency_level *level, uint32_t *latency)
 	uint32_t val;
 
 	if (!lpm_root_node) {
-		pr_err("lpm_probe not completed\n");
+		pr_debug("lpm_probe not completed\n");
 		return -EAGAIN;
 	}
 
@@ -249,7 +249,7 @@ int lpm_get_latency(struct latency_level *level, uint32_t *latency)
 
 	cluster = cluster_aff_match(lpm_root_node, level->affinity_level);
 	if (!cluster) {
-		pr_err("No matching cluster found for affinity_level:%d\n",
+		pr_debug("No matching cluster found for affinity_level:%d\n",
 							level->affinity_level);
 		return -EINVAL;
 	}
@@ -260,7 +260,7 @@ int lpm_get_latency(struct latency_level *level, uint32_t *latency)
 		val = least_cluster_latency(cluster, level);
 
 	if (!val) {
-		pr_err("No mode with affinity_level:%d reset_level:%d\n",
+		pr_debug("No mode with affinity_level:%d reset_level:%d\n",
 				level->affinity_level, level->reset_level);
 		return -EINVAL;
 	}
@@ -1477,7 +1477,7 @@ static void lpm_cpuidle_s2idle(struct cpuidle_device *dev,
 			break;
 	}
 	if (idx < 0) {
-		pr_err("Failed suspend\n");
+		pr_debug("Failed suspend\n");
 		return;
 	}
 
@@ -1497,7 +1497,7 @@ static void lpm_cpuidle_s2idle(struct cpuidle_device *dev,
 	spin_unlock(&s2idle_lock);
 
 	if (s2idle_aborted) {
-		pr_err("Aborting s2idle suspend: too many iterations\n");
+		pr_debug("Aborting s2idle suspend: too many iterations\n");
 		pm_system_wakeup();
 		goto exit;
 	}
@@ -1530,7 +1530,7 @@ static int cpuidle_register_cpu(struct cpuidle_driver *drv,
 	drv->cpumask = mask;
 	ret = cpuidle_register_driver(drv);
 	if (ret) {
-		pr_err("Failed to register cpuidle driver %d\n", ret);
+		pr_debug("Failed to register cpuidle driver %d\n", ret);
 		goto failed_driver_register;
 	}
 
@@ -1540,7 +1540,7 @@ static int cpuidle_register_cpu(struct cpuidle_driver *drv,
 
 		ret = cpuidle_register_device(device);
 		if (ret) {
-			pr_err("Failed to register cpuidle driver for cpu:%u\n",
+			pr_debug("Failed to register cpuidle driver for cpu:%u\n",
 					cpu);
 			goto failed_driver_register;
 		}
@@ -1697,7 +1697,7 @@ static void register_cluster_lpm_stats(struct lpm_cluster *cl,
 	kfree(level_name);
 
 	list_for_each_entry(cpu, &cl->cpu, list) {
-		pr_err("%s()\n", __func__);
+		pr_debug("%s()\n", __func__);
 		register_cpu_lpm_stats(cpu, cl);
 	}
 	if (!list_empty(&cl->cpu))
@@ -1735,7 +1735,7 @@ static int lpm_suspend_enter(suspend_state_t state)
 			break;
 	}
 	if (idx < 0) {
-		pr_err("Failed suspend\n");
+		pr_debug("Failed suspend\n");
 		return 0;
 	}
 	cpu_prepare(lpm_cpu, idx, false);
@@ -1771,7 +1771,7 @@ static int lpm_probe(struct platform_device *pdev)
 	lpm_root_node = lpm_of_parse_cluster(pdev);
 
 	if (IS_ERR_OR_NULL(lpm_root_node)) {
-		pr_err("Failed to probe low power modes\n");
+		pr_debug("Failed to probe low power modes\n");
 		put_online_cpus();
 		return PTR_ERR(lpm_root_node);
 	}
@@ -1857,7 +1857,7 @@ static int __init lpm_levels_module_init(void)
 	for_each_possible_cpu(cpu) {
 		rc = arm_cpuidle_init(cpu);
 		if (rc) {
-			pr_err("CPU%d ARM CPUidle init failed (%d)\n", cpu, rc);
+			pr_debug("CPU%d ARM CPUidle init failed (%d)\n", cpu, rc);
 			return rc;
 		}
 	}
