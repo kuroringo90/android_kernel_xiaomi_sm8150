@@ -28,6 +28,7 @@ struct sugov_tunables {
 	unsigned int hispeed_load;
 	unsigned int hispeed_freq;
 	bool pl;
+	bool iowait_boost_enable;
 };
 
 struct sugov_policy {
@@ -653,6 +654,9 @@ static ssize_t up_rate_limit_us_store(struct gov_attr_set *attr_set,
 	struct sugov_policy *sg_policy;
 	unsigned int rate_limit_us;
 
+	/* Don't let userspace change this */
+	return count;
+
 	if (kstrtouint(buf, 10, &rate_limit_us))
 		return -EINVAL;
 
@@ -672,6 +676,9 @@ static ssize_t down_rate_limit_us_store(struct gov_attr_set *attr_set,
 	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 	struct sugov_policy *sg_policy;
 	unsigned int rate_limit_us;
+
+	/* Don't let userspace change this */
+	return count;
 
 	if (kstrtouint(buf, 10, &rate_limit_us))
 		return -EINVAL;
@@ -962,12 +969,26 @@ static int sugov_init(struct cpufreq_policy *policy)
 		goto stop_kthread;
 	}
 
-	tunables->up_rate_limit_us =
-				cpufreq_policy_transition_delay_us(policy);
-	tunables->down_rate_limit_us =
-				cpufreq_policy_transition_delay_us(policy);
-	tunables->hispeed_load = DEFAULT_HISPEED_LOAD;
+	switch(policy->cpu) {
+	default:
+	case 0:
+	  tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT_LP;
+	  tunables->down_rate_limit_us = CONFIG_SCHEDUTIL_DOWN_RATE_LIMIT_LP;
+	  break;
+	case 4:
+	  tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT_PERF;
+	  tunables->down_rate_limit_us = CONFIG_SCHEDUTIL_DOWN_RATE_LIMIT_PERF;
+	  break;
+	case 7:
+	  tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT_PERFP;
+	  tunables->down_rate_limit_us = CONFIG_SCHEDUTIL_DOWN_RATE_LIMIT_PERFP;
+	  break;
+	}
+
+	tunables->hispeed_load = 99;
 	tunables->hispeed_freq = 0;
+	tunables->iowait_boost_enable = false;
+
 
 	policy->governor_data = sg_policy;
 	sg_policy->tunables = tunables;
