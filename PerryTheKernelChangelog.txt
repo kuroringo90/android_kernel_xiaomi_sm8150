@@ -1,13 +1,15 @@
 Changelog:
-•Bump to 4.14.277
-•Bump to perry 2.0
-•Fixed encryption issue,now It boot also for encrypted user
-•Enable as default zswap
-•Reintroduce k-profiles
-•Use bic as TCP congestion algorithm
-•Silence a lot of useless log spam
-•Thermal improvement
+•Bump to 4.14.278
+•Bump to perry 2.2
+•Fingerprint improved
+•Imported wireguard 1.0.20211208
+•Add and tuned frequencies
+•Tuned up/down rate limit
+•Thermal improved
+•Disabled CAF CPU Boost
+•Removed a lot of useless logspam
 •A lot of optimizations under the hood
+
 
 Notes:
 NO MIUI SUPPORT, ONLY AOSP
