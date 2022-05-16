@@ -946,9 +946,9 @@ void zswap_compact(void) {
 	if (!zswap_pool)
 		return;
 
-	pr_info("zswap_compact++\n");
+	pr_debug("zswap_compact++\n");
 	zpool_compact(zswap_pool);
-	pr_info("zswap_compact--\n");
+	pr_debug("zswap_compact--\n");
 }
 
 /* frees an entry in zswap */
@@ -1107,7 +1107,7 @@ static int __init init_zswap(void)
 
 	pool = __zswap_pool_create_fallback();
 	if (pool) {
-		pr_info("loaded using pool %s/%s\n", pool->tfm_name,
+		pr_debug("loaded using pool %s/%s\n", pool->tfm_name,
 			zpool_get_type(pool->zpool));
 		list_add(&pool->list, &zswap_pools);
 		zswap_has_pool = true;
