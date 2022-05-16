@@ -377,10 +377,10 @@ void __init cpu_smt_disable(bool force)
 		return;
 
 	if (force) {
-		pr_info("SMT: Force disabled\n");
+		pr_debug("SMT: Force disabled\n");
 		cpu_smt_control = CPU_SMT_FORCE_DISABLED;
 	} else {
-		pr_info("SMT: disabled\n");
+		pr_debug("SMT: disabled\n");
 		cpu_smt_control = CPU_SMT_DISABLED;
 	}
 }
@@ -1293,7 +1293,7 @@ int freeze_secondary_cpus(int primary)
 			continue;
 
 		if (pm_wakeup_pending()) {
-			pr_info("Wakeup pending. Abort CPU freeze\n");
+			pr_debug("Wakeup pending. Abort CPU freeze\n");
 			error = -EBUSY;
 			break;
 		}
