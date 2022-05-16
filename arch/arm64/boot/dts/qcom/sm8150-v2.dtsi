@@ -1303,8 +1303,8 @@
 &soc {
 	qcom,msm-thermal-simple {
 		compatible = "qcom,msm-thermal-simple";
-		qcom,poll-ms = <3000>;
-		qcom,start-delay = <5>;
+		qcom,poll-ms = <1500>;
+		qcom,start-delay = <1>;
 
 		zone@0 {
 			reg = <0>;
