@@ -1377,6 +1377,5 @@
 			qcom,prime-khz = <1804800>;
 			qcom,trip-deg = <85000>;
 		};
-
 	};
 };
