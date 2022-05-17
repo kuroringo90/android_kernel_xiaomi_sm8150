@@ -2198,13 +2198,13 @@ static int dsi_panel_parse_misc_features(struct dsi_panel *panel)
 
 	panel->ulps_feature_enabled = true;
 
-	pr_info("%s: ulps feature %s\n", __func__,
+	pr_debug("%s: ulps feature %s\n", __func__,
 		(panel->ulps_feature_enabled ? "enabled" : "disabled"));
 
 	panel->ulps_suspend_enabled =
 		utils->read_bool(utils->data, "qcom,suspend-ulps-enabled");
 
-	pr_info("%s: ulps during suspend feature %s", __func__,
+	pr_debug("%s: ulps during suspend feature %s", __func__,
 		(panel->ulps_suspend_enabled ? "enabled" : "disabled"));
 
 	panel->te_using_watchdog_timer = utils->read_bool(utils->data,
@@ -2953,7 +2953,7 @@ static int dsi_panel_parse_topology(
 	};
 
 	if (topology_override >= 0 && topology_override < top_count) {
-		pr_info("override topology: cfg:%d lm:%d comp_enc:%d intf:%d\n",
+		pr_debug("override topology: cfg:%d lm:%d comp_enc:%d intf:%d\n",
 			topology_override,
 			topology[topology_override].num_lm,
 			topology[topology_override].num_enc,
@@ -2976,7 +2976,7 @@ static int dsi_panel_parse_topology(
 		goto parse_fail;
 	}
 
-	pr_info("default topology: lm: %d comp_enc:%d intf: %d\n",
+	pr_debug("default topology: lm: %d comp_enc:%d intf: %d\n",
 		topology[top_sel].num_lm,
 		topology[top_sel].num_enc,
 		topology[top_sel].num_intf);
@@ -3027,7 +3027,7 @@ static int dsi_panel_parse_roi_alignment(struct dsi_parser_utils *utils,
 			align->min_height = value[5];
 		}
 
-		pr_info("roi alignment: [%d, %d, %d, %d, %d, %d]\n",
+		pr_debug("roi alignment: [%d, %d, %d, %d, %d, %d]\n",
 			align->xstart_pix_align,
 			align->width_pix_align,
 			align->ystart_pix_align,
@@ -3063,13 +3063,13 @@ static int dsi_panel_parse_partial_update_caps(struct dsi_display_mode *mode,
 		else if (!strcmp(data, "single_roi"))
 			roi_caps->num_roi = 1;
 		else {
-			pr_info(
+			pr_debug(
 			"invalid value for qcom,partial-update-enabled: %s\n",
 			data);
 			return 0;
 		}
 	} else {
-		pr_info("partial update disabled as the property is not set\n");
+		pr_debug("partial update disabled as the property is not set\n");
 		return 0;
 	}
 
@@ -3078,7 +3078,7 @@ static int dsi_panel_parse_partial_update_caps(struct dsi_display_mode *mode,
 
 	roi_caps->enabled = roi_caps->num_roi > 0;
 
-	pr_info("partial update num_rois=%d enabled=%d\n", roi_caps->num_roi,
+	pr_debug("partial update num_rois=%d enabled=%d\n", roi_caps->num_roi,
 			roi_caps->enabled);
 
 	if (roi_caps->enabled)
@@ -3398,7 +3398,7 @@ static int dsi_panel_parse_esd_config(struct dsi_panel *panel)
 		esd_mode = "te_check";
 	}
 
-	pr_info("ESD enabled with mode: %s\n", esd_mode);
+	pr_debug("ESD enabled with mode: %s\n", esd_mode);
 
 	return 0;
 
