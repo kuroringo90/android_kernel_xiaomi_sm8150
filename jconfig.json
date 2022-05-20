@@ -1,11 +1,11 @@
 {
   "kernel": {
     "name": "PerryTheKernel",
-    "version": "2.2",
-    "link": "https://github.com/kuroringo90/android_kernel_xiaomi_sm8150/releases/download/2.2/PerryTheKernel-vayu_2.2.zip",
+    "version": "2.3",
+    "link": "https://github.com/kuroringo90/android_kernel_xiaomi_sm8150/releases/download/2.3/PerryTheKernel_2.3.zip",
     "changelog_url": "https://raw.githubusercontent.com/kuroringo90/android_kernel_xiaomi_sm8150/FKM_UPDATER/PerryTheKernelChangelog.txt",
-    "date": "2022-05-14",
-    "sha1": "782afc28aa79cac5873544d44dae086c5009bb10"
+    "date": "2022-05-20",
+    "sha1": "c4cfb80fecdaedf44aeedea6747799b1e7f8d0ab"
   },
   "support": {
     "link": "https://t.me/+ali7aAYSl2s1NzY0"
