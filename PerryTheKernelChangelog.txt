@@ -1,15 +1,14 @@
-Changelog:
-•Bump to 4.14.278
-•Bump to perry 2.2
-•Fingerprint improved
-•Imported wireguard 1.0.20211208
-•Add and tuned frequencies
-•Tuned up/down rate limit
-•Thermal improved
-•Disabled CAF CPU Boost
-•Removed a lot of useless logspam
+•Upstream to linux kernel v4.14.280
+•Bump to PerryTheKernel 2.3
+•Remove MSM _THERMAL_SIMPLE
+•Reworked thermals
+•Reworked up/down rate for schedutil
+•Introduced blu_schedutil
+•Reworked up/down rate for •blu_schedutil (for more battery)
+•Introduced Kcal (User requested)
+•Enable ULPS
+•Removed a lot of useless log
 •A lot of optimizations under the hood
-
 
 Notes:
 NO MIUI SUPPORT, ONLY AOSP
