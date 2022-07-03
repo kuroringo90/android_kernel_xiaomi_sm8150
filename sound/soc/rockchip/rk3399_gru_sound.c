@@ -387,8 +387,7 @@ static const struct snd_soc_dai_link rockchip_dais[] = {
 	[DAILINK_RT5514_DSP] = {
 		.name = "RT5514 DSP",
 		.stream_name = "Wake on Voice",
-		.codec_name = "snd-soc-dummy",
-		.codec_dai_name = "snd-soc-dummy-dai",
+		.codec_dai_name = "rt5514-dsp-cpu-dai",
 	},
 };
 
@@ -433,18 +432,7 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 		if (index < 0)
 			continue;
 
-		switch (index) {
-		case DAILINK_CDNDP:
-			np_cpu = np_cpu1;
-			break;
-		case DAILINK_RT5514_DSP:
-			np_cpu = np_codec;
-			break;
-		default:
-			np_cpu = np_cpu0;
-			break;
-		}
-
+		np_cpu = (index == DAILINK_CDNDP) ? np_cpu1 : np_cpu0;
 		if (!np_cpu) {
 			dev_err(dev, "Missing 'rockchip,cpu' for %s\n",
 				rockchip_dais[index].name);
@@ -454,8 +442,7 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 		dai = &card->dai_link[card->num_links++];
 		*dai = rockchip_dais[index];
 
-		if (!dai->codec_name)
-			dai->codec_of_node = np_codec;
+		dai->codec_of_node = np_codec;
 		dai->platform_of_node = np_cpu;
 		dai->cpu_of_node = np_cpu;
 	}

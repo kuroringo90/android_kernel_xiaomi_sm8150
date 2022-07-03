@@ -722,7 +722,7 @@ static void ca8210_mlme_reset_worker(struct work_struct *work)
 static void ca8210_rx_done(struct cas_control *cas_ctl)
 {
 	u8 *buf;
-	unsigned int len;
+	u8 len;
 	struct work_priv_container *mlme_reset_wpc;
 	struct ca8210_priv *priv = cas_ctl->priv;
 
@@ -731,7 +731,7 @@ static void ca8210_rx_done(struct cas_control *cas_ctl)
 	if (len > CA8210_SPI_BUF_SIZE) {
 		dev_crit(
 			&priv->spi->dev,
-			"Received packet len (%u) erroneously long\n",
+			"Received packet len (%d) erroneously long\n",
 			len
 		);
 		goto finish;
@@ -1770,7 +1770,6 @@ static int ca8210_async_xmit_complete(
 			status
 		);
 		if (status != MAC_TRANSACTION_OVERFLOW) {
-			dev_kfree_skb_any(priv->tx_skb);
 			ieee802154_wake_queue(priv->hw);
 			return 0;
 		}
@@ -2494,14 +2493,13 @@ static ssize_t ca8210_test_int_user_write(
 	struct ca8210_priv *priv = filp->private_data;
 	u8 command[CA8210_SPI_BUF_SIZE];
 
-	memset(command, SPI_IDLE, 6);
-	if (len > CA8210_SPI_BUF_SIZE || len < 2) {
+	if (len > CA8210_SPI_BUF_SIZE) {
 		dev_warn(
 			&priv->spi->dev,
-			"userspace requested erroneous write length (%zu)\n",
+			"userspace requested erroneously long write (%zu)\n",
 			len
 		);
-		return -EBADE;
+		return -EMSGSIZE;
 	}
 
 	ret = copy_from_user(command, in_buf, len);
@@ -2512,13 +2510,6 @@ static ssize_t ca8210_test_int_user_write(
 			ret
 		);
 		return -EIO;
-	}
-	if (len != command[1] + 2) {
-		dev_err(
-			&priv->spi->dev,
-			"write len does not match packet length field\n"
-		);
-		return -EBADE;
 	}
 
 	ret = ca8210_test_check_upstream(command, priv->spi);
@@ -2925,7 +2916,6 @@ static int ca8210_dev_com_init(struct ca8210_priv *priv)
 	);
 	if (!priv->irq_workqueue) {
 		dev_crit(&priv->spi->dev, "alloc of irq_workqueue failed!\n");
-		destroy_workqueue(priv->mlme_workqueue);
 		return -ENOMEM;
 	}
 
@@ -2976,8 +2966,8 @@ static void ca8210_hw_setup(struct ieee802154_hw *ca8210_hw)
 	ca8210_hw->phy->cca.opt = NL802154_CCA_OPT_ENERGY_CARRIER_AND;
 	ca8210_hw->phy->cca_ed_level = -9800;
 	ca8210_hw->phy->symbol_duration = 16;
-	ca8210_hw->phy->lifs_period = 40 * ca8210_hw->phy->symbol_duration;
-	ca8210_hw->phy->sifs_period = 12 * ca8210_hw->phy->symbol_duration;
+	ca8210_hw->phy->lifs_period = 40;
+	ca8210_hw->phy->sifs_period = 12;
 	ca8210_hw->flags =
 		IEEE802154_HW_AFILT |
 		IEEE802154_HW_OMIT_CKSUM |
@@ -3155,12 +3145,12 @@ static int ca8210_probe(struct spi_device *spi_device)
 		goto error;
 	}
 
-	priv->spi->dev.platform_data = pdata;
 	ret = ca8210_get_platform_data(priv->spi, pdata);
 	if (ret) {
 		dev_crit(&spi_device->dev, "ca8210_get_platform_data failed\n");
 		goto error;
 	}
+	priv->spi->dev.platform_data = pdata;
 
 	ret = ca8210_dev_com_init(priv);
 	if (ret) {

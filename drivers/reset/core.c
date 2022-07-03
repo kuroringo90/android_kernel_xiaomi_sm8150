@@ -398,10 +398,7 @@ static struct reset_control *__reset_control_get_internal(
 	if (!rstc)
 		return ERR_PTR(-ENOMEM);
 
-	if (!try_module_get(rcdev->owner)) {
-		kfree(rstc);
-		return ERR_PTR(-ENODEV);
-	}
+	try_module_get(rcdev->owner);
 
 	rstc->rcdev = rcdev;
 	list_add(&rstc->list, &rcdev->reset_control_head);
@@ -469,29 +466,28 @@ struct reset_control *__of_reset_control_get(struct device_node *node,
 			break;
 		}
 	}
+	of_node_put(args.np);
 
 	if (!rcdev) {
-		rstc = ERR_PTR(-EPROBE_DEFER);
-		goto out;
+		mutex_unlock(&reset_list_mutex);
+		return ERR_PTR(-EPROBE_DEFER);
 	}
 
 	if (WARN_ON(args.args_count != rcdev->of_reset_n_cells)) {
-		rstc = ERR_PTR(-EINVAL);
-		goto out;
+		mutex_unlock(&reset_list_mutex);
+		return ERR_PTR(-EINVAL);
 	}
 
 	rstc_id = rcdev->of_xlate(rcdev, &args);
 	if (rstc_id < 0) {
-		rstc = ERR_PTR(rstc_id);
-		goto out;
+		mutex_unlock(&reset_list_mutex);
+		return ERR_PTR(rstc_id);
 	}
 
 	/* reset_list_mutex also protects the rcdev's reset_control list */
 	rstc = __reset_control_get_internal(rcdev, rstc_id, shared);
 
-out:
 	mutex_unlock(&reset_list_mutex);
-	of_node_put(args.np);
 
 	return rstc;
 }
@@ -516,7 +512,6 @@ static void reset_control_array_put(struct reset_control_array *resets)
 	for (i = 0; i < resets->num_rstcs; i++)
 		__reset_control_put_internal(resets->rstc[i]);
 	mutex_unlock(&reset_list_mutex);
-	kfree(resets);
 }
 
 /**
@@ -571,18 +566,17 @@ EXPORT_SYMBOL_GPL(__devm_reset_control_get);
  * device_reset - find reset controller associated with the device
  *                and perform reset
  * @dev: device to be reset by the controller
- * @optional: whether it is optional to reset the device
  *
- * Convenience wrapper for __reset_control_get() and reset_control_reset().
+ * Convenience wrapper for reset_control_get() and reset_control_reset().
  * This is useful for the common case of devices with single, dedicated reset
  * lines.
  */
-int __device_reset(struct device *dev, bool optional)
+int device_reset(struct device *dev)
 {
 	struct reset_control *rstc;
 	int ret;
 
-	rstc = __reset_control_get(dev, NULL, 0, 0, optional);
+	rstc = reset_control_get(dev, NULL);
 	if (IS_ERR(rstc))
 		return PTR_ERR(rstc);
 
@@ -592,7 +586,7 @@ int __device_reset(struct device *dev, bool optional)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(__device_reset);
+EXPORT_SYMBOL_GPL(device_reset);
 
 /**
  * APIs to manage an array of reset controls.

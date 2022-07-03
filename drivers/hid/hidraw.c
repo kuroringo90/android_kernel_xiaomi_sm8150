@@ -192,11 +192,6 @@ static ssize_t hidraw_get_report(struct file *file, char __user *buffer, size_t 
 	int ret = 0, len;
 	unsigned char report_number;
 
-	if (!hidraw_table[minor] || !hidraw_table[minor]->exist) {
-		ret = -ENODEV;
-		goto out;
-	}
-
 	dev = hidraw_table[minor]->hid;
 
 	if (!dev->ll_driver->raw_request) {
@@ -257,14 +252,13 @@ out:
 static unsigned int hidraw_poll(struct file *file, poll_table *wait)
 {
 	struct hidraw_list *list = file->private_data;
-	unsigned int mask = POLLOUT | POLLWRNORM; /* hidraw is always writable */
 
 	poll_wait(file, &list->hidraw->wait, wait);
 	if (list->head != list->tail)
-		mask |= POLLIN | POLLRDNORM;
+		return POLLIN | POLLRDNORM;
 	if (!list->hidraw->exist)
-		mask |= POLLERR | POLLHUP;
-	return mask;
+		return POLLERR | POLLHUP;
+	return 0;
 }
 
 static int hidraw_open(struct inode *inode, struct file *file)
@@ -379,7 +373,7 @@ static long hidraw_ioctl(struct file *file, unsigned int cmd,
 
 	mutex_lock(&minors_lock);
 	dev = hidraw_table[minor];
-	if (!dev || !dev->exist) {
+	if (!dev) {
 		ret = -ENODEV;
 		goto out;
 	}

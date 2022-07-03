@@ -21,7 +21,6 @@
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
-#include <linux/reset.h>
 #include <linux/slab.h>
 
 #define RNG_CR 0x00
@@ -47,7 +46,6 @@ struct stm32_rng_private {
 	struct hwrng rng;
 	void __iomem *base;
 	struct clk *clk;
-	struct reset_control *rst;
 };
 
 static int stm32_rng_read(struct hwrng *rng, void *data, size_t max, bool wait)
@@ -142,13 +140,6 @@ static int stm32_rng_probe(struct platform_device *ofdev)
 	if (IS_ERR(priv->clk))
 		return PTR_ERR(priv->clk);
 
-	priv->rst = devm_reset_control_get(&ofdev->dev, NULL);
-	if (!IS_ERR(priv->rst)) {
-		reset_control_assert(priv->rst);
-		udelay(2);
-		reset_control_deassert(priv->rst);
-	}
-
 	dev_set_drvdata(dev, priv);
 
 	priv->rng.name = dev_driver_string(dev),
@@ -164,13 +155,6 @@ static int stm32_rng_probe(struct platform_device *ofdev)
 	pm_runtime_enable(dev);
 
 	return devm_hwrng_register(dev, &priv->rng);
-}
-
-static int stm32_rng_remove(struct platform_device *ofdev)
-{
-	pm_runtime_disable(&ofdev->dev);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -209,7 +193,6 @@ static struct platform_driver stm32_rng_driver = {
 		.of_match_table = stm32_rng_match,
 	},
 	.probe = stm32_rng_probe,
-	.remove = stm32_rng_remove,
 };
 
 module_platform_driver(stm32_rng_driver);

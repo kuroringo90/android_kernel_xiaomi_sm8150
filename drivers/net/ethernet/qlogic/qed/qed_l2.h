@@ -214,13 +214,10 @@ struct qed_sp_vport_update_params {
 	u8				anti_spoofing_en;
 	u8				update_accept_any_vlan_flg;
 	u8				accept_any_vlan;
-	u32				bins[8];
+	unsigned long			bins[8];
 	struct qed_rss_params		*rss_params;
 	struct qed_filter_accept_flags	accept_flags;
 	struct qed_sge_tpa_params	*sge_tpa_params;
-	u8				update_ctl_frame_check;
-	u8				mac_chk_en;
-	u8				ethtype_chk_en;
 };
 
 int qed_sp_vport_update(struct qed_hwfn *p_hwfn,

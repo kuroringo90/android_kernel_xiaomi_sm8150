@@ -49,7 +49,6 @@
  *
  *****************************************************************************/
 #include "iwl-trans.h"
-#include "iwl-prph.h"
 #include "iwl-context-info.h"
 #include "internal.h"
 
@@ -156,11 +155,6 @@ void _iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans, bool low_power)
 		return;
 
 	trans_pcie->is_down = true;
-
-	/* Stop dbgc before stopping device */
-	iwl_write_prph(trans, DBGC_IN_SAMPLE, 0);
-	udelay(100);
-	iwl_write_prph(trans, DBGC_OUT_CTRL, 0);
 
 	/* tell the device to stop sending interrupts */
 	iwl_disable_interrupts(trans);
@@ -292,7 +286,8 @@ int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 	/* This may fail if AMT took ownership of the device */
 	if (iwl_pcie_prepare_card_hw(trans)) {
 		IWL_WARN(trans, "Exit HW not ready\n");
-		return -EIO;
+		ret = -EIO;
+		goto out;
 	}
 
 	iwl_enable_rfkill_int(trans);

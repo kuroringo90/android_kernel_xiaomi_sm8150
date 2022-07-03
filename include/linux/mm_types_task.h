@@ -32,7 +32,7 @@
 #define VMACACHE_MASK (VMACACHE_SIZE - 1)
 
 struct vmacache {
-	u64 seqnum;
+	u32 seqnum;
 	struct vm_area_struct *vmas[VMACACHE_SIZE];
 };
 
@@ -41,7 +41,6 @@ enum {
 	MM_ANONPAGES,	/* Resident anonymous pages */
 	MM_SWAPENTS,	/* Anonymous swap entries */
 	MM_SHMEMPAGES,	/* Resident shared memory pages */
-	MM_UNRECLAIMABLE,	/* Unreclaimable pages, e.g. shared with HW */
 	NR_MM_COUNTERS
 };
 

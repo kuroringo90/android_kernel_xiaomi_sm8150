@@ -394,10 +394,6 @@ int reservation_object_get_fences_rcu(struct reservation_object *obj,
 					   GFP_NOWAIT | __GFP_NOWARN);
 			if (!nshared) {
 				rcu_read_unlock();
-
-				dma_fence_put(fence_excl);
-				fence_excl = NULL;
-
 				nshared = krealloc(shared, sz, GFP_KERNEL);
 				if (nshared) {
 					shared = nshared;
@@ -459,15 +455,13 @@ long reservation_object_wait_timeout_rcu(struct reservation_object *obj,
 					 unsigned long timeout)
 {
 	struct dma_fence *fence;
-	unsigned seq, shared_count;
+	unsigned seq, shared_count, i = 0;
 	long ret = timeout ? timeout : 1;
-	int i;
 
 retry:
 	shared_count = 0;
 	seq = read_seqcount_begin(&obj->seq);
 	rcu_read_lock();
-	i = -1;
 
 	fence = rcu_dereference(obj->fence_excl);
 	if (fence && !test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
@@ -483,14 +477,14 @@ retry:
 		fence = NULL;
 	}
 
-	if (wait_all) {
+	if (!fence && wait_all) {
 		struct reservation_object_list *fobj =
 						rcu_dereference(obj->fence);
 
 		if (fobj)
 			shared_count = fobj->shared_count;
 
-		for (i = 0; !fence && i < shared_count; ++i) {
+		for (i = 0; i < shared_count; ++i) {
 			struct dma_fence *lfence = rcu_dereference(fobj->shared[i]);
 
 			if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT,

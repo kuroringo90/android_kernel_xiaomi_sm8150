@@ -179,15 +179,12 @@ LLC ?= llc
 CLANG ?= clang
 
 # Trick to allow make to be run from this directory
-all: $(LIBBPF)
+all:
 	$(MAKE) -C ../../ $(CURDIR)/
 
 clean:
 	$(MAKE) -C ../../ M=$(CURDIR) clean
-	@find $(CURDIR) -type f -name '*~' -delete
-
-$(LIBBPF): FORCE
-	$(MAKE) -C $(dir $@) $(notdir $@)
+	@rm -f *~
 
 $(obj)/syscall_nrs.s:	$(src)/syscall_nrs.c
 	$(call if_changed_dep,cc_s_c)

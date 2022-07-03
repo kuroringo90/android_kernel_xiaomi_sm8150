@@ -1462,8 +1462,6 @@ EXPORT_SYMBOL(drm_atomic_helper_async_check);
  * drm_atomic_async_check() succeeds. Async commits are not supposed to swap
  * the states like normal sync commits, but just do in-place changes on the
  * current state.
- *
- * TODO: Implement full swap instead of doing in-place changes.
  */
 void drm_atomic_helper_async_commit(struct drm_device *dev,
 				    struct drm_atomic_state *state)
@@ -1474,16 +1472,8 @@ void drm_atomic_helper_async_commit(struct drm_device *dev,
 	int i;
 
 	for_each_new_plane_in_state(state, plane, plane_state, i) {
-		struct drm_framebuffer *old_fb = plane->state->fb;
-
 		funcs = plane->helper_private;
 		funcs->atomic_async_update(plane, plane_state);
-
-		/*
-		 * Make sure the FBs have been swapped so that cleanups in the
-		 * new_state performs a cleanup in the old FB.
-		 */
-		WARN_ON_ONCE(plane_state->fb != old_fb);
 	}
 }
 EXPORT_SYMBOL(drm_atomic_helper_async_commit);
@@ -2608,7 +2598,7 @@ int drm_atomic_helper_set_config(struct drm_mode_set *set,
 
 	ret = handle_conflicting_encoders(state, true);
 	if (ret)
-		goto fail;
+		return ret;
 
 	ret = drm_atomic_commit(state);
 
@@ -2693,9 +2683,31 @@ commit:
 	return 0;
 }
 
-static int __drm_atomic_helper_disable_all(struct drm_device *dev,
-					   struct drm_modeset_acquire_ctx *ctx,
-					   bool clean_old_fbs)
+/**
+ * drm_atomic_helper_disable_all - disable all currently active outputs
+ * @dev: DRM device
+ * @ctx: lock acquisition context
+ *
+ * Loops through all connectors, finding those that aren't turned off and then
+ * turns them off by setting their DPMS mode to OFF and deactivating the CRTC
+ * that they are connected to.
+ *
+ * This is used for example in suspend/resume to disable all currently active
+ * functions when suspending. If you just want to shut down everything at e.g.
+ * driver unload, look at drm_atomic_helper_shutdown().
+ *
+ * Note that if callers haven't already acquired all modeset locks this might
+ * return -EDEADLK, which must be handled by calling drm_modeset_backoff().
+ *
+ * Returns:
+ * 0 on success or a negative error code on failure.
+ *
+ * See also:
+ * drm_atomic_helper_suspend(), drm_atomic_helper_resume() and
+ * drm_atomic_helper_shutdown().
+ */
+int drm_atomic_helper_disable_all(struct drm_device *dev,
+				  struct drm_modeset_acquire_ctx *ctx)
 {
 	struct drm_atomic_state *state;
 	struct drm_connector_state *conn_state;
@@ -2747,11 +2759,8 @@ static int __drm_atomic_helper_disable_all(struct drm_device *dev,
 			goto free;
 
 		drm_atomic_set_fb_for_plane(plane_state, NULL);
-
-		if (clean_old_fbs) {
-			plane->old_fb = plane->fb;
-			plane_mask |= BIT(drm_plane_index(plane));
-		}
+		plane_mask |= BIT(drm_plane_index(plane));
+		plane->old_fb = plane->fb;
 	}
 
 	ret = drm_atomic_commit(state);
@@ -2762,34 +2771,6 @@ free:
 	return ret;
 }
 
-/**
- * drm_atomic_helper_disable_all - disable all currently active outputs
- * @dev: DRM device
- * @ctx: lock acquisition context
- *
- * Loops through all connectors, finding those that aren't turned off and then
- * turns them off by setting their DPMS mode to OFF and deactivating the CRTC
- * that they are connected to.
- *
- * This is used for example in suspend/resume to disable all currently active
- * functions when suspending. If you just want to shut down everything at e.g.
- * driver unload, look at drm_atomic_helper_shutdown().
- *
- * Note that if callers haven't already acquired all modeset locks this might
- * return -EDEADLK, which must be handled by calling drm_modeset_backoff().
- *
- * Returns:
- * 0 on success or a negative error code on failure.
- *
- * See also:
- * drm_atomic_helper_suspend(), drm_atomic_helper_resume() and
- * drm_atomic_helper_shutdown().
- */
-int drm_atomic_helper_disable_all(struct drm_device *dev,
-				  struct drm_modeset_acquire_ctx *ctx)
-{
-	return __drm_atomic_helper_disable_all(dev, ctx, false);
-}
 EXPORT_SYMBOL(drm_atomic_helper_disable_all);
 
 /**
@@ -2812,7 +2793,7 @@ void drm_atomic_helper_shutdown(struct drm_device *dev)
 	while (1) {
 		ret = drm_modeset_lock_all_ctx(dev, &ctx);
 		if (!ret)
-			ret = __drm_atomic_helper_disable_all(dev, &ctx, true);
+			ret = drm_atomic_helper_disable_all(dev, &ctx);
 
 		if (ret != -EDEADLK)
 			break;
@@ -2909,18 +2890,23 @@ EXPORT_SYMBOL(drm_atomic_helper_suspend);
 int drm_atomic_helper_commit_duplicated_state(struct drm_atomic_state *state,
 					      struct drm_modeset_acquire_ctx *ctx)
 {
-	int i, ret;
+	int i;
 	struct drm_plane *plane;
 	struct drm_plane_state *new_plane_state;
 	struct drm_connector *connector;
 	struct drm_connector_state *new_conn_state;
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *new_crtc_state;
+	unsigned plane_mask = 0;
+	struct drm_device *dev = state->dev;
+	int ret;
 
 	state->acquire_ctx = ctx;
 
-	for_each_new_plane_in_state(state, plane, new_plane_state, i)
+	for_each_new_plane_in_state(state, plane, new_plane_state, i) {
+		plane_mask |= BIT(drm_plane_index(plane));
 		state->planes[i].old_state = plane->state;
+	}
 
 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i)
 		state->crtcs[i].old_state = crtc->state;
@@ -2929,8 +2915,8 @@ int drm_atomic_helper_commit_duplicated_state(struct drm_atomic_state *state,
 		state->connectors[i].old_state = connector->state;
 
 	ret = drm_atomic_commit(state);
-
-	state->acquire_ctx = NULL;
+	if (plane_mask)
+		drm_atomic_clean_old_fb(dev, plane_mask, ret);
 
 	return ret;
 }
@@ -3129,7 +3115,7 @@ struct drm_encoder *
 drm_atomic_helper_best_encoder(struct drm_connector *connector)
 {
 	WARN_ON(connector->encoder_ids[1]);
-	return drm_encoder_find(connector->dev, NULL, connector->encoder_ids[0]);
+	return drm_encoder_find(connector->dev, connector->encoder_ids[0]);
 }
 EXPORT_SYMBOL(drm_atomic_helper_best_encoder);
 

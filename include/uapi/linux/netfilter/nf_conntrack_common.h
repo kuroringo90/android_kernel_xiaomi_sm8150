@@ -36,7 +36,7 @@ enum ip_conntrack_info {
 
 #define NF_CT_STATE_INVALID_BIT			(1 << 0)
 #define NF_CT_STATE_BIT(ctinfo)			(1 << ((ctinfo) % IP_CT_IS_REPLY + 1))
-#define NF_CT_STATE_UNTRACKED_BIT		(1 << 6)
+#define NF_CT_STATE_UNTRACKED_BIT		(1 << (IP_CT_UNTRACKED + 1))
 
 /* Bitset representing status of connection. */
 enum ip_conntrack_status {
@@ -125,13 +125,10 @@ enum ip_conntrack_events {
 	IPCT_NATSEQADJ = IPCT_SEQADJ,
 	IPCT_SECMARK,		/* new security mark has been set */
 	IPCT_LABEL,		/* new connlabel has been set */
-	IPCT_COUNTER,           /* Packet counters have matched. */
 #ifdef __KERNEL__
 	__IPCT_MAX
 #endif
 };
-
-#define IPCT_COUNTER IPCT_COUNTER
 
 enum ip_conntrack_expect_events {
 	IPEXP_NEW,		/* new expectation */

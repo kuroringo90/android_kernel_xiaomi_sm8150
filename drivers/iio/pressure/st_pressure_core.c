@@ -287,10 +287,7 @@ static const struct st_sensor_settings st_press_sensors_settings[] = {
 			.mask_ihl = 0x80,
 			.addr_od = 0x22,
 			.mask_od = 0x40,
-			.stat_drdy = {
-				.addr = ST_SENSORS_DEFAULT_STAT_ADDR,
-				.mask = 0x03,
-			},
+			.addr_stat_drdy = ST_SENSORS_DEFAULT_STAT_ADDR,
 		},
 		.multi_read_bit = true,
 		.bootime = 2,
@@ -398,10 +395,7 @@ static const struct st_sensor_settings st_press_sensors_settings[] = {
 			.mask_ihl = 0x80,
 			.addr_od = 0x22,
 			.mask_od = 0x40,
-			.stat_drdy = {
-				.addr = ST_SENSORS_DEFAULT_STAT_ADDR,
-				.mask = 0x03,
-			},
+			.addr_stat_drdy = ST_SENSORS_DEFAULT_STAT_ADDR,
 		},
 		.multi_read_bit = true,
 		.bootime = 2,
@@ -460,10 +454,7 @@ static const struct st_sensor_settings st_press_sensors_settings[] = {
 			.mask_ihl = 0x80,
 			.addr_od = 0x12,
 			.mask_od = 0x40,
-			.stat_drdy = {
-				.addr = ST_SENSORS_DEFAULT_STAT_ADDR,
-				.mask = 0x03,
-			},
+			.addr_stat_drdy = ST_SENSORS_DEFAULT_STAT_ADDR,
 		},
 		.multi_read_bit = false,
 		.bootime = 2,
@@ -617,7 +608,7 @@ int st_press_common_probe(struct iio_dev *indio_dev)
 	if (!pdata && press_data->sensor_settings->drdy_irq.addr)
 		pdata =	(struct st_sensors_platform_data *)&default_press_pdata;
 
-	err = st_sensors_init_sensor(indio_dev, pdata);
+	err = st_sensors_init_sensor(indio_dev, press_data->dev->platform_data);
 	if (err < 0)
 		goto st_press_power_off;
 

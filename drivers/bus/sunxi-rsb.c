@@ -178,7 +178,6 @@ static struct bus_type sunxi_rsb_bus = {
 	.match		= sunxi_rsb_device_match,
 	.probe		= sunxi_rsb_device_probe,
 	.remove		= sunxi_rsb_device_remove,
-	.uevent		= of_device_uevent_modalias,
 };
 
 static void sunxi_rsb_dev_release(struct device *dev)
@@ -223,8 +222,6 @@ static struct sunxi_rsb_device *sunxi_rsb_device_create(struct sunxi_rsb *rsb,
 	}
 
 	dev_dbg(&rdev->dev, "device %s registered\n", dev_name(&rdev->dev));
-
-	return rdev;
 
 err_device_add:
 	put_device(&rdev->dev);
@@ -347,7 +344,7 @@ static int sunxi_rsb_read(struct sunxi_rsb *rsb, u8 rtaddr, u8 addr,
 	if (ret)
 		goto unlock;
 
-	*buf = readl(rsb->regs + RSB_DATA) & GENMASK(len * 8 - 1, 0);
+	*buf = readl(rsb->regs + RSB_DATA);
 
 unlock:
 	mutex_unlock(&rsb->lock);

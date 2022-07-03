@@ -262,7 +262,7 @@ static void eq_pf_process(struct mlx5_eq *eq)
 		case MLX5_PFAULT_SUBTYPE_WQE:
 			/* WQE based event */
 			pfault->type =
-				(be32_to_cpu(pf_eqe->wqe.pftype_wq) >> 24) & 0x7;
+				be32_to_cpu(pf_eqe->wqe.pftype_wq) >> 24;
 			pfault->token =
 				be32_to_cpu(pf_eqe->wqe.token);
 			pfault->wqe.wq_num =
@@ -776,7 +776,7 @@ err1:
 	return err;
 }
 
-void mlx5_stop_eqs(struct mlx5_core_dev *dev)
+int mlx5_stop_eqs(struct mlx5_core_dev *dev)
 {
 	struct mlx5_eq_table *table = &dev->priv.eq_table;
 	int err;
@@ -785,26 +785,22 @@ void mlx5_stop_eqs(struct mlx5_core_dev *dev)
 	if (MLX5_CAP_GEN(dev, pg)) {
 		err = mlx5_destroy_unmap_eq(dev, &table->pfault_eq);
 		if (err)
-			mlx5_core_err(dev, "failed to destroy page fault eq, err(%d)\n",
-				      err);
+			return err;
 	}
 #endif
 
 	err = mlx5_destroy_unmap_eq(dev, &table->pages_eq);
 	if (err)
-		mlx5_core_err(dev, "failed to destroy pages eq, err(%d)\n",
-			      err);
+		return err;
 
-	err = mlx5_destroy_unmap_eq(dev, &table->async_eq);
-	if (err)
-		mlx5_core_err(dev, "failed to destroy async eq, err(%d)\n",
-			      err);
+	mlx5_destroy_unmap_eq(dev, &table->async_eq);
 	mlx5_cmd_use_polling(dev);
 
 	err = mlx5_destroy_unmap_eq(dev, &table->cmd_eq);
 	if (err)
-		mlx5_core_err(dev, "failed to destroy command eq, err(%d)\n",
-			      err);
+		mlx5_cmd_use_events(dev);
+
+	return err;
 }
 
 int mlx5_core_eq_query(struct mlx5_core_dev *dev, struct mlx5_eq *eq,

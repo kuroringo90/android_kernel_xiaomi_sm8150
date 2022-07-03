@@ -256,7 +256,6 @@ void ipvlan_process_multicast(struct work_struct *work)
 		}
 		if (dev)
 			dev_put(dev);
-		cond_resched();
 	}
 }
 
@@ -305,10 +304,6 @@ static int ipvlan_rcv_frame(struct ipvl_addr *addr, struct sk_buff **pskb,
 		if (dev_forward_skb(ipvlan->dev, skb) == NET_RX_SUCCESS)
 			success = true;
 	} else {
-		if (!ether_addr_equal_64bits(eth_hdr(skb)->h_dest,
-					     ipvlan->phy_dev->dev_addr))
-			skb->pkt_type = PACKET_OTHERHOST;
-
 		ret = RX_HANDLER_ANOTHER;
 		success = true;
 	}
@@ -380,7 +375,6 @@ static int ipvlan_process_v4_outbound(struct sk_buff *skb)
 		.flowi4_oif = dev->ifindex,
 		.flowi4_tos = RT_TOS(ip4h->tos),
 		.flowi4_flags = FLOWI_FLAG_ANYSRC,
-		.flowi4_mark = skb->mark,
 		.daddr = ip4h->daddr,
 		.saddr = ip4h->saddr,
 	};
@@ -449,21 +443,19 @@ static int ipvlan_process_outbound(struct sk_buff *skb)
 	struct ethhdr *ethh = eth_hdr(skb);
 	int ret = NET_XMIT_DROP;
 
+	/* In this mode we dont care about multicast and broadcast traffic */
+	if (is_multicast_ether_addr(ethh->h_dest)) {
+		pr_warn_ratelimited("Dropped {multi|broad}cast of type= [%x]\n",
+				    ntohs(skb->protocol));
+		kfree_skb(skb);
+		goto out;
+	}
+
 	/* The ipvlan is a pseudo-L2 device, so the packets that we receive
 	 * will have L2; which need to discarded and processed further
 	 * in the net-ns of the main-device.
 	 */
 	if (skb_mac_header_was_set(skb)) {
-		/* In this mode we dont care about
-		 * multicast and broadcast traffic */
-		if (is_multicast_ether_addr(ethh->h_dest)) {
-			pr_debug_ratelimited(
-				"Dropped {multi|broad}cast of type=[%x]\n",
-				ntohs(skb->protocol));
-			kfree_skb(skb);
-			goto out;
-		}
-
 		skb_pull(skb, sizeof(*ethh));
 		skb->mac_header = (typeof(skb->mac_header))~0U;
 		skb_reset_network_header(skb);

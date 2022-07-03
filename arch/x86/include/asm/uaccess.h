@@ -124,11 +124,6 @@ extern int __get_user_bad(void);
 
 #define __uaccess_begin() stac()
 #define __uaccess_end()   clac()
-#define __uaccess_begin_nospec()	\
-({					\
-	stac();				\
-	barrier_nospec();		\
-})
 
 /*
  * This is a type: either unsigned long, if the argument fits into
@@ -293,7 +288,8 @@ do {									\
 		__put_user_asm(x, ptr, retval, "l", "k", "ir", errret);	\
 		break;							\
 	case 8:								\
-		__put_user_asm_u64(x, ptr, retval, errret);		\
+		__put_user_asm_u64((__typeof__(*ptr))(x), ptr, retval,	\
+				   errret);				\
 		break;							\
 	default:							\
 		__put_user_bad();					\
@@ -439,10 +435,8 @@ do {									\
 #define __put_user_nocheck(x, ptr, size)			\
 ({								\
 	int __pu_err;						\
-	__typeof__(*(ptr)) __pu_val;				\
-	__pu_val = x;						\
 	__uaccess_begin();					\
-	__put_user_size(__pu_val, (ptr), (size), __pu_err, -EFAULT);\
+	__put_user_size((x), (ptr), (size), __pu_err, -EFAULT);	\
 	__uaccess_end();					\
 	__builtin_expect(__pu_err, 0);				\
 })
@@ -451,10 +445,8 @@ do {									\
 ({									\
 	int __gu_err;							\
 	__inttype(*(ptr)) __gu_val;					\
-	__typeof__(ptr) __gu_ptr = (ptr);				\
-	__typeof__(size) __gu_size = (size);				\
-	__uaccess_begin_nospec();					\
-	__get_user_size(__gu_val, __gu_ptr, __gu_size, __gu_err, -EFAULT);	\
+	__uaccess_begin();						\
+	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
 	__uaccess_end();						\
 	(x) = (__force __typeof__(*(ptr)))__gu_val;			\
 	__builtin_expect(__gu_err, 0);					\
@@ -494,10 +486,6 @@ struct __large_struct { unsigned long buf[100]; };
 	current->thread.uaccess_err = 0;				\
 	__uaccess_begin();						\
 	barrier();
-
-#define uaccess_try_nospec do {						\
-	current->thread.uaccess_err = 0;				\
-	__uaccess_begin_nospec();					\
 
 #define uaccess_catch(err)						\
 	__uaccess_end();						\
@@ -560,7 +548,7 @@ struct __large_struct { unsigned long buf[100]; };
  *	get_user_ex(...);
  * } get_user_catch(err)
  */
-#define get_user_try		uaccess_try_nospec
+#define get_user_try		uaccess_try
 #define get_user_catch(err)	uaccess_catch(err)
 
 #define get_user_ex(x, ptr)	do {					\
@@ -594,7 +582,7 @@ extern void __cmpxchg_wrong_size(void)
 	__typeof__(ptr) __uval = (uval);				\
 	__typeof__(*(ptr)) __old = (old);				\
 	__typeof__(*(ptr)) __new = (new);				\
-	__uaccess_begin_nospec();					\
+	__uaccess_begin();						\
 	switch (size) {							\
 	case 1:								\
 	{								\
@@ -711,21 +699,8 @@ extern struct movsl_mask {
  * checking before using them, but you have to surround them with the
  * user_access_begin/end() pair.
  */
-static __must_check inline bool user_access_begin(int type,
-						  const void __user *ptr,
-						  size_t len)
-{
-	if (unlikely(!access_ok(type, ptr, len)))
-		return 0;
-	__uaccess_begin_nospec();
-	return 1;
-}
-
-#define user_access_begin(a, b, c)	user_access_begin(a, b, c)
+#define user_access_begin()	__uaccess_begin()
 #define user_access_end()	__uaccess_end()
-
-#define user_access_save()	smap_save()
-#define user_access_restore(x)	smap_restore(x)
 
 #define unsafe_put_user(x, ptr, err_label)					\
 do {										\

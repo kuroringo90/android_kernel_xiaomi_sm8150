@@ -124,7 +124,6 @@ static struct ip6_tnl *ip6gre_tunnel_lookup(struct net_device *dev,
 	int dev_type = (gre_proto == htons(ETH_P_TEB)) ?
 		       ARPHRD_ETHER : ARPHRD_IP6GRE;
 	int score, cand_score = 4;
-	struct net_device *ndev;
 
 	for_each_ip_tunnel_rcu(t, ign->tunnels_r_l[h0 ^ h1]) {
 		if (!ipv6_addr_equal(local, &t->parms.laddr) ||
@@ -227,9 +226,9 @@ static struct ip6_tnl *ip6gre_tunnel_lookup(struct net_device *dev,
 	if (cand)
 		return cand;
 
-	ndev = READ_ONCE(ign->fb_tunnel_dev);
-	if (ndev && ndev->flags & IFF_UP)
-		return netdev_priv(ndev);
+	dev = ign->fb_tunnel_dev;
+	if (dev->flags & IFF_UP)
+		return netdev_priv(dev);
 
 	return NULL;
 }
@@ -320,13 +319,11 @@ static struct ip6_tnl *ip6gre_tunnel_locate(struct net *net,
 	if (t || !create)
 		return t;
 
-	if (parms->name[0]) {
-		if (!dev_valid_name(parms->name))
-			return NULL;
+	if (parms->name[0])
 		strlcpy(name, parms->name, IFNAMSIZ);
-	} else {
+	else
 		strcpy(name, "ip6gre%d");
-	}
+
 	dev = alloc_netdev(sizeof(*t), name, NET_NAME_UNKNOWN,
 			   ip6gre_tunnel_setup);
 	if (!dev)
@@ -340,16 +337,16 @@ static struct ip6_tnl *ip6gre_tunnel_locate(struct net *net,
 
 	nt->dev = dev;
 	nt->net = dev_net(dev);
+	ip6gre_tnl_link_config(nt, 1);
 
 	if (register_netdevice(dev) < 0)
 		goto failed_free;
-
-	ip6gre_tnl_link_config(nt, 1);
 
 	/* Can use a lockless transmit, unless we generate output sequences */
 	if (!(nt->parms.o_flags & TUNNEL_SEQ))
 		dev->features |= NETIF_F_LLTX;
 
+	dev_hold(dev);
 	ip6gre_tunnel_link(ign, nt);
 	return nt;
 
@@ -364,8 +361,6 @@ static void ip6gre_tunnel_uninit(struct net_device *dev)
 	struct ip6gre_net *ign = net_generic(t->net, ip6gre_net_id);
 
 	ip6gre_tunnel_unlink(ign, t);
-	if (ign->fb_tunnel_dev == dev)
-		WRITE_ONCE(ign->fb_tunnel_dev, NULL);
 	dst_cache_reset(&t->dst_cache);
 	dev_put(dev);
 }
@@ -529,7 +524,7 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 
 	/* TooBig packet may have updated dst->dev's mtu */
 	if (dst && dst_mtu(dst) > dst->dev->mtu)
-		dst->ops->update_pmtu(dst, NULL, skb, dst->dev->mtu, false);
+		dst->ops->update_pmtu(dst, NULL, skb, dst->dev->mtu);
 
 	return ip6_tnl_xmit(skb, dev, dsfield, fl6, encap_limit, pmtu,
 			    NEXTHDR_GRE);
@@ -1025,36 +1020,6 @@ static void ip6gre_tunnel_setup(struct net_device *dev)
 	eth_random_addr(dev->perm_addr);
 }
 
-#define GRE6_FEATURES (NETIF_F_SG |		\
-		       NETIF_F_FRAGLIST |	\
-		       NETIF_F_HIGHDMA |	\
-		       NETIF_F_HW_CSUM)
-
-static void ip6gre_tnl_init_features(struct net_device *dev)
-{
-	struct ip6_tnl *nt = netdev_priv(dev);
-
-	dev->features		|= GRE6_FEATURES;
-	dev->hw_features	|= GRE6_FEATURES;
-
-	if (!(nt->parms.o_flags & TUNNEL_SEQ)) {
-		/* TCP offload with GRE SEQ is not supported, nor
-		 * can we support 2 levels of outer headers requiring
-		 * an update.
-		 */
-		if (!(nt->parms.o_flags & TUNNEL_CSUM) ||
-		    nt->encap.type == TUNNEL_ENCAP_NONE) {
-			dev->features    |= NETIF_F_GSO_SOFTWARE;
-			dev->hw_features |= NETIF_F_GSO_SOFTWARE;
-		}
-
-		/* Can use a lockless transmit, unless we generate
-		 * output sequences
-		 */
-		dev->features |= NETIF_F_LLTX;
-	}
-}
-
 static int ip6gre_tunnel_init_common(struct net_device *dev)
 {
 	struct ip6_tnl *tunnel;
@@ -1089,8 +1054,6 @@ static int ip6gre_tunnel_init_common(struct net_device *dev)
 	if (!(tunnel->parms.flags & IP6_TNL_F_IGN_ENCAP_LIMIT))
 		dev->mtu -= 8;
 
-	ip6gre_tnl_init_features(dev);
-
 	return 0;
 }
 
@@ -1123,6 +1086,8 @@ static void ip6gre_fb_tunnel_init(struct net_device *dev)
 	strcpy(tunnel->parms.name, dev->name);
 
 	tunnel->hlen		= sizeof(struct ipv6hdr) + 4;
+
+	dev_hold(dev);
 }
 
 
@@ -1166,16 +1131,15 @@ static void ip6gre_destroy_tunnels(struct net *net, struct list_head *head)
 static int __net_init ip6gre_init_net(struct net *net)
 {
 	struct ip6gre_net *ign = net_generic(net, ip6gre_net_id);
-	struct net_device *ndev;
 	int err;
 
-	ndev = alloc_netdev(sizeof(struct ip6_tnl), "ip6gre0",
-			    NET_NAME_UNKNOWN, ip6gre_tunnel_setup);
-	if (!ndev) {
+	ign->fb_tunnel_dev = alloc_netdev(sizeof(struct ip6_tnl), "ip6gre0",
+					  NET_NAME_UNKNOWN,
+					  ip6gre_tunnel_setup);
+	if (!ign->fb_tunnel_dev) {
 		err = -ENOMEM;
 		goto err_alloc_dev;
 	}
-	ign->fb_tunnel_dev = ndev;
 	dev_net_set(ign->fb_tunnel_dev, net);
 	/* FB netdevice is special: we have one, and only one per netns.
 	 * Allowing to move it to another netns is clearly unsafe.
@@ -1195,7 +1159,7 @@ static int __net_init ip6gre_init_net(struct net *net)
 	return 0;
 
 err_reg_dev:
-	free_netdev(ndev);
+	free_netdev(ign->fb_tunnel_dev);
 err_alloc_dev:
 	return err;
 }
@@ -1311,6 +1275,7 @@ static void ip6gre_netlink_parms(struct nlattr *data[],
 
 static int ip6gre_tap_init(struct net_device *dev)
 {
+	struct ip6_tnl *tunnel;
 	int ret;
 
 	ret = ip6gre_tunnel_init_common(dev);
@@ -1318,6 +1283,10 @@ static int ip6gre_tap_init(struct net_device *dev)
 		return ret;
 
 	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
+
+	tunnel = netdev_priv(dev);
+
+	ip6gre_tnl_link_config(tunnel, 1);
 
 	return 0;
 }
@@ -1333,12 +1302,16 @@ static const struct net_device_ops ip6gre_tap_netdev_ops = {
 	.ndo_get_iflink = ip6_tnl_get_iflink,
 };
 
+#define GRE6_FEATURES (NETIF_F_SG |		\
+		       NETIF_F_FRAGLIST |	\
+		       NETIF_F_HIGHDMA |		\
+		       NETIF_F_HW_CSUM)
+
 static void ip6gre_tap_setup(struct net_device *dev)
 {
 
 	ether_setup(dev);
 
-	dev->max_mtu = 0;
 	dev->netdev_ops = &ip6gre_tap_netdev_ops;
 	dev->needs_free_netdev = true;
 	dev->priv_destructor = ip6gre_dev_free;
@@ -1411,15 +1384,31 @@ static int ip6gre_newlink(struct net *src_net, struct net_device *dev,
 
 	nt->dev = dev;
 	nt->net = dev_net(dev);
+	ip6gre_tnl_link_config(nt, !tb[IFLA_MTU]);
+
+	dev->features		|= GRE6_FEATURES;
+	dev->hw_features	|= GRE6_FEATURES;
+
+	if (!(nt->parms.o_flags & TUNNEL_SEQ)) {
+		/* TCP offload with GRE SEQ is not supported, nor
+		 * can we support 2 levels of outer headers requiring
+		 * an update.
+		 */
+		if (!(nt->parms.o_flags & TUNNEL_CSUM) ||
+		    (nt->encap.type == TUNNEL_ENCAP_NONE)) {
+			dev->features    |= NETIF_F_GSO_SOFTWARE;
+			dev->hw_features |= NETIF_F_GSO_SOFTWARE;
+		}
+
+		/* Can use a lockless transmit, unless we generate
+		 * output sequences
+		 */
+		dev->features |= NETIF_F_LLTX;
+	}
 
 	err = register_netdevice(dev);
 	if (err)
 		goto out;
-
-	ip6gre_tnl_link_config(nt, !tb[IFLA_MTU]);
-
-	if (tb[IFLA_MTU])
-		ip6_tnl_change_mtu(dev, nla_get_u32(tb[IFLA_MTU]));
 
 	dev_hold(dev);
 	ip6gre_tunnel_link(ign, nt);

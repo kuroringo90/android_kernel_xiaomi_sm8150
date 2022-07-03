@@ -182,8 +182,6 @@ static u32 bmp280_compensate_humidity(struct bmp280_data *data,
 		+ (s32)2097152) * H2 + 8192) >> 14);
 	var -= ((((var >> 15) * (var >> 15)) >> 7) * (s32)H1) >> 4;
 
-	var = clamp_val(var, 0, 419430400);
-
 	return var >> 12;
 };
 
@@ -364,9 +362,10 @@ static int bmp280_read_humid(struct bmp280_data *data, int *val, int *val2)
 	}
 	comp_humidity = bmp280_compensate_humidity(data, adc_humidity);
 
-	*val = comp_humidity * 1000 / 1024;
+	*val = comp_humidity;
+	*val2 = 1024;
 
-	return IIO_VAL_INT;
+	return IIO_VAL_FRACTIONAL;
 }
 
 static int bmp280_read_raw(struct iio_dev *indio_dev,
@@ -653,7 +652,7 @@ static int bmp180_measure(struct bmp280_data *data, u8 ctrl_meas)
 	unsigned int ctrl;
 
 	if (data->use_eoc)
-		reinit_completion(&data->done);
+		init_completion(&data->done);
 
 	ret = regmap_write(data->regmap, BMP280_REG_CTRL_MEAS, ctrl_meas);
 	if (ret)
@@ -909,9 +908,6 @@ static int bmp085_fetch_eoc_irq(struct device *dev,
 			"trying to enforce it\n");
 		irq_trig = IRQF_TRIGGER_RISING;
 	}
-
-	init_completion(&data->done);
-
 	ret = devm_request_threaded_irq(dev,
 			irq,
 			bmp085_eoc_irq,

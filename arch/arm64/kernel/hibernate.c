@@ -40,7 +40,6 @@
 #include <asm/suspend.h>
 #include <asm/sysreg.h>
 #include <asm/virt.h>
-#include <soc/qcom/boot_stats.h>
 
 /*
  * Hibernate core relies on this value being 0 on resume, and marks it
@@ -85,14 +84,6 @@ static struct arch_hibernate_hdr {
 	void		(*reenter_kernel)(void);
 
 	/*
-	 * Another entry point if jump to kernel happens with mmu disabled,
-	 * generally done when restoring hibernation image from bootloader
-	 * context
-	 */
-
-	phys_addr_t	phys_reenter_kernel;
-
-	/*
 	 * We need to know where the __hyp_stub_vectors are after restore to
 	 * re-configure el2.
 	 */
@@ -135,7 +126,6 @@ int arch_hibernation_header_save(void *addr, unsigned int max_size)
 	arch_hdr_invariants(&hdr->invariants);
 	hdr->ttbr1_el1		= __pa_symbol(swapper_pg_dir);
 	hdr->reenter_kernel	= _cpu_resume;
-	hdr->phys_reenter_kernel  = __pa(cpu_resume);
 
 	/* We can't use __hyp_get_vectors() because kvm may still be loaded */
 	if (el2_reset_needed())
@@ -256,7 +246,8 @@ static int create_safe_exec_page(void *src_start, size_t length,
 	}
 
 	pte = pte_offset_kernel(pmd, dst_addr);
-	set_pte(pte, pfn_pte(virt_to_pfn(dst), PAGE_KERNEL_EXEC));
+	set_pte(pte, __pte(virt_to_phys((void *)dst) |
+			 pgprot_val(PAGE_KERNEL_EXEC)));
 
 	/*
 	 * Load our new page tables. A strict BBM approach requires that we
@@ -303,16 +294,13 @@ int swsusp_arch_suspend(void)
 		sleep_cpu = smp_processor_id();
 		ret = swsusp_save();
 	} else {
-		place_marker("M - Image Kernel Start");
 		/* Clean kernel core startup/idle code to PoC*/
 		dcache_clean_range(__mmuoff_data_start, __mmuoff_data_end);
 		dcache_clean_range(__idmap_text_start, __idmap_text_end);
 
 		/* Clean kvm setup code to PoC? */
-		if (el2_reset_needed()) {
+		if (el2_reset_needed())
 			dcache_clean_range(__hyp_idmap_text_start, __hyp_idmap_text_end);
-			dcache_clean_range(__hyp_text_start, __hyp_text_end);
-		}
 
 		/* make the crash dump kernel image protected again */
 		crash_post_resume();
@@ -325,21 +313,9 @@ int swsusp_arch_suspend(void)
 
 		sleep_cpu = -EINVAL;
 		__cpu_suspend_exit();
-
-		/*
-		 * Just in case the boot kernel did turn the SSBD
-		 * mitigation off behind our back, let's set the state
-		 * to what we expect it to be.
-		 */
-		switch (arm64_get_ssbd_state()) {
-		case ARM64_SSBD_FORCE_ENABLE:
-		case ARM64_SSBD_KERNEL:
-			arm64_set_ssbd_mitigation(true);
-		}
 	}
 
 	local_dbg_restore(flags);
-	place_marker("PM: Kernel restore start!");
 
 	return ret;
 }

@@ -11,9 +11,6 @@
 #include <linux/perf_event.h>
 #include "percpu_freelist.h"
 
-#define STACK_CREATE_FLAG_MASK \
-	(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY)
-
 struct stack_map_bucket {
 	struct pcpu_freelist_node fnode;
 	u32 hash;
@@ -31,8 +28,7 @@ struct bpf_stack_map {
 
 static int prealloc_elems_and_freelist(struct bpf_stack_map *smap)
 {
-	u64 elem_size = sizeof(struct stack_map_bucket) +
-			(u64)smap->map.value_size;
+	u32 elem_size = sizeof(struct stack_map_bucket) + smap->map.value_size;
 	int err;
 
 	smap->elems = bpf_map_area_alloc(elem_size * smap->map.max_entries,
@@ -64,7 +60,7 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 	if (!capable(CAP_SYS_ADMIN))
 		return ERR_PTR(-EPERM);
 
-	if (attr->map_flags & ~STACK_CREATE_FLAG_MASK)
+	if (attr->map_flags & ~BPF_F_NUMA_NODE)
 		return ERR_PTR(-EINVAL);
 
 	/* check sanity of attributes */
@@ -75,8 +71,6 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 
 	/* hash table size must be power of 2 */
 	n_buckets = roundup_pow_of_two(attr->max_entries);
-	if (!n_buckets)
-		return ERR_PTR(-E2BIG);
 
 	cost = n_buckets * sizeof(struct stack_map_bucket *) + sizeof(*smap);
 	if (cost >= U32_MAX - PAGE_SIZE)

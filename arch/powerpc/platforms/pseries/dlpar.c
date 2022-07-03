@@ -63,10 +63,6 @@ static struct property *dlpar_parse_cc_property(struct cc_workarea *ccwa)
 
 	name = (char *)ccwa + be32_to_cpu(ccwa->name_offset);
 	prop->name = kstrdup(name, GFP_KERNEL);
-	if (!prop->name) {
-		dlpar_free_cc_property(prop);
-		return NULL;
-	}
 
 	prop->length = be32_to_cpu(ccwa->prop_length);
 	value = (char *)ccwa + be32_to_cpu(ccwa->prop_offset);
@@ -139,6 +135,7 @@ void dlpar_free_cc_nodes(struct device_node *dn)
 #define NEXT_PROPERTY   3
 #define PREV_PARENT     4
 #define MORE_MEMORY     5
+#define CALL_AGAIN	-2
 #define ERR_CFG_USE     -9003
 
 struct device_node *dlpar_configure_connector(__be32 drc_index,
@@ -179,9 +176,6 @@ struct device_node *dlpar_configure_connector(__be32 drc_index,
 		memcpy(data_buf, rtas_data_buf, RTAS_DATA_BUF_SIZE);
 
 		spin_unlock(&rtas_data_buf_lock);
-
-		if (rtas_busy_delay(rc))
-			continue;
 
 		switch (rc) {
 		case COMPLETE:
@@ -235,6 +229,9 @@ struct device_node *dlpar_configure_connector(__be32 drc_index,
 			parent_path = last_dn->parent->full_name;
 			break;
 
+		case CALL_AGAIN:
+			break;
+
 		case MORE_MEMORY:
 		case ERR_CFG_USE:
 		default:
@@ -286,8 +283,6 @@ int dlpar_detach_node(struct device_node *dn)
 	rc = of_detach_node(dn);
 	if (rc)
 		return rc;
-
-	of_node_put(dn);
 
 	return 0;
 }
@@ -591,26 +586,11 @@ static ssize_t dlpar_show(struct class *class, struct class_attribute *attr,
 
 static CLASS_ATTR_RW(dlpar);
 
-int __init dlpar_workqueue_init(void)
+static int __init pseries_dlpar_init(void)
 {
-	if (pseries_hp_wq)
-		return 0;
-
 	pseries_hp_wq = alloc_workqueue("pseries hotplug workqueue",
-			WQ_UNBOUND, 1);
-
-	return pseries_hp_wq ? 0 : -ENOMEM;
-}
-
-static int __init dlpar_sysfs_init(void)
-{
-	int rc;
-
-	rc = dlpar_workqueue_init();
-	if (rc)
-		return rc;
-
+					WQ_UNBOUND, 1);
 	return sysfs_create_file(kernel_kobj, &class_attr_dlpar.attr);
 }
-machine_device_initcall(pseries, dlpar_sysfs_init);
+machine_device_initcall(pseries, pseries_dlpar_init);
 

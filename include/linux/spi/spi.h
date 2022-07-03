@@ -314,7 +314,6 @@ static inline void spi_unregister_driver(struct spi_driver *sdrv)
  * @max_speed_hz: Highest supported transfer speed
  * @flags: other constraints relevant to this driver
  * @slave: indicates that this is an SPI slave controller
- * @slave_state: indicates state of SPI slave controller
  * @max_transfer_size: function that returns the max transfer size for
  *	a &spi_device; may be %NULL, so the default %SIZE_MAX will be used.
  * @max_message_size: function that returns the max message size for
@@ -453,14 +452,8 @@ struct spi_controller {
 
 #define SPI_MASTER_GPIO_SS		BIT(5)	/* GPIO CS must select slave */
 
-	/* flag indicating this is a non-devres managed controller */
-	bool			devm_allocated;
-
 	/* flag indicating this is an SPI slave controller */
 	bool			slave;
-
-	/* flag indicating SPI slave controller state */
-	bool                    slave_state;
 
 	/*
 	 * on some hardware transfer / message size may be constrained
@@ -643,25 +636,6 @@ static inline struct spi_controller *spi_alloc_slave(struct device *host,
 		return NULL;
 
 	return __spi_alloc_controller(host, size, true);
-}
-
-struct spi_controller *__devm_spi_alloc_controller(struct device *dev,
-						   unsigned int size,
-						   bool slave);
-
-static inline struct spi_controller *devm_spi_alloc_master(struct device *dev,
-							   unsigned int size)
-{
-	return __devm_spi_alloc_controller(dev, size, false);
-}
-
-static inline struct spi_controller *devm_spi_alloc_slave(struct device *dev,
-							  unsigned int size)
-{
-	if (!IS_ENABLED(CONFIG_SPI_SLAVE))
-		return NULL;
-
-	return __devm_spi_alloc_controller(dev, size, true);
 }
 
 extern int spi_register_controller(struct spi_controller *ctlr);

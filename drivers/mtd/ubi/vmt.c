@@ -69,11 +69,16 @@ static ssize_t vol_attribute_show(struct device *dev,
 {
 	int ret;
 	struct ubi_volume *vol = container_of(dev, struct ubi_volume, dev);
-	struct ubi_device *ubi = vol->ubi;
+	struct ubi_device *ubi;
+
+	ubi = ubi_get_device(vol->ubi->ubi_num);
+	if (!ubi)
+		return -ENODEV;
 
 	spin_lock(&ubi->volumes_lock);
 	if (!ubi->volumes[vol->vol_id]) {
 		spin_unlock(&ubi->volumes_lock);
+		ubi_put_device(ubi);
 		return -ENODEV;
 	}
 	/* Take a reference to prevent volume removal */
@@ -111,6 +116,7 @@ static ssize_t vol_attribute_show(struct device *dev,
 	vol->ref_count -= 1;
 	ubi_assert(vol->ref_count >= 0);
 	spin_unlock(&ubi->volumes_lock);
+	ubi_put_device(ubi);
 	return ret;
 }
 
@@ -133,7 +139,6 @@ static void vol_release(struct device *dev)
 	struct ubi_volume *vol = container_of(dev, struct ubi_volume, dev);
 
 	ubi_eba_replace_table(vol, NULL);
-	ubi_fastmap_destroy_checkmap(vol);
 	kfree(vol);
 }
 
@@ -265,12 +270,6 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 			vol->last_eb_bytes = vol->usable_leb_size;
 	}
 
-	/* Make volume "available" before it becomes accessible via sysfs */
-	spin_lock(&ubi->volumes_lock);
-	ubi->volumes[vol_id] = vol;
-	ubi->vol_count += 1;
-	spin_unlock(&ubi->volumes_lock);
-
 	/* Register character device for the volume */
 	cdev_init(&vol->cdev, &ubi_vol_cdev_operations);
 	vol->cdev.owner = THIS_MODULE;
@@ -299,6 +298,11 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	if (err)
 		goto out_sysfs;
 
+	spin_lock(&ubi->volumes_lock);
+	ubi->volumes[vol_id] = vol;
+	ubi->vol_count += 1;
+	spin_unlock(&ubi->volumes_lock);
+
 	ubi_volume_notify(ubi, vol, UBI_VOLUME_ADDED);
 	self_check_volumes(ubi);
 	return err;
@@ -311,10 +315,7 @@ out_sysfs:
 	 */
 	cdev_device_del(&vol->cdev, &vol->dev);
 out_mapping:
-	spin_lock(&ubi->volumes_lock);
-	ubi->volumes[vol_id] = NULL;
-	ubi->vol_count -= 1;
-	spin_unlock(&ubi->volumes_lock);
+	ubi_eba_destroy_table(eba_tbl);
 out_acc:
 	spin_lock(&ubi->volumes_lock);
 	ubi->rsvd_pebs -= vol->reserved_pebs;

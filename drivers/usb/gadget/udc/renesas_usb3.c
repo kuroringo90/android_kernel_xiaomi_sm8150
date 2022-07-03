@@ -21,7 +21,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
-#include <linux/string.h>
 #include <linux/sys_soc.h>
 #include <linux/uaccess.h>
 #include <linux/usb/ch9.h>
@@ -335,7 +334,6 @@ struct renesas_usb3 {
 	struct usb_gadget_driver *driver;
 	struct extcon_dev *extcon;
 	struct work_struct extcon_work;
-	struct dentry *dentry;
 
 	struct renesas_usb3_ep *usb3_ep;
 	int num_usb3_eps;
@@ -353,7 +351,6 @@ struct renesas_usb3 {
 	bool extcon_host;		/* check id and set EXTCON_USB_HOST */
 	bool extcon_usb;		/* check vbus and set EXTCON_USB */
 	bool forced_b_device;
-	bool start_to_connect;
 };
 
 #define gadget_to_renesas_usb3(_gadget)	\
@@ -472,8 +469,7 @@ static void usb3_init_axi_bridge(struct renesas_usb3 *usb3)
 static void usb3_init_epc_registers(struct renesas_usb3 *usb3)
 {
 	usb3_write(usb3, ~0, USB3_USB_INT_STA_1);
-	if (!usb3->workaround_for_vbus)
-		usb3_enable_irq_1(usb3, USB_INT_1_VBUS_CNG);
+	usb3_enable_irq_1(usb3, USB_INT_1_VBUS_CNG);
 }
 
 static bool usb3_wakeup_usb2_phy(struct renesas_usb3 *usb3)
@@ -627,13 +623,6 @@ static void usb3_disconnect(struct renesas_usb3 *usb3)
 	usb3_usb2_pullup(usb3, 0);
 	usb3_clear_bit(usb3, USB30_CON_B3_CONNECT, USB3_USB30_CON);
 	usb3_reset_epc(usb3);
-	usb3_disable_irq_1(usb3, USB_INT_1_B2_RSUM | USB_INT_1_B3_PLLWKUP |
-			   USB_INT_1_B3_LUPSUCS | USB_INT_1_B3_DISABLE |
-			   USB_INT_1_SPEED | USB_INT_1_B3_WRMRST |
-			   USB_INT_1_B3_HOTRST | USB_INT_1_B2_SPND |
-			   USB_INT_1_B2_L1SPND | USB_INT_1_B2_USBRST);
-	usb3_clear_bit(usb3, USB_COM_CON_SPD_MODE, USB3_USB_COM_CON);
-	usb3_init_epc_registers(usb3);
 
 	if (usb3->driver)
 		usb3->driver->disconnect(&usb3->gadget);
@@ -679,7 +668,8 @@ static void usb3_mode_config(struct renesas_usb3 *usb3, bool host, bool a_dev)
 	usb3_set_mode(usb3, host);
 	usb3_vbus_out(usb3, a_dev);
 	/* for A-Peripheral or forced B-device mode */
-	if ((!host && a_dev) || usb3->start_to_connect)
+	if ((!host && a_dev) ||
+	    (usb3->workaround_for_vbus && usb3->forced_b_device))
 		usb3_connect(usb3);
 	spin_unlock_irqrestore(&usb3->lock, flags);
 }
@@ -790,15 +780,12 @@ static void usb3_irq_epc_int_1_speed(struct renesas_usb3 *usb3)
 	switch (speed) {
 	case USB_STA_SPEED_SS:
 		usb3->gadget.speed = USB_SPEED_SUPER;
-		usb3->gadget.ep0->maxpacket = USB3_EP0_SS_MAX_PACKET_SIZE;
 		break;
 	case USB_STA_SPEED_HS:
 		usb3->gadget.speed = USB_SPEED_HIGH;
-		usb3->gadget.ep0->maxpacket = USB3_EP0_HSFS_MAX_PACKET_SIZE;
 		break;
 	case USB_STA_SPEED_FS:
 		usb3->gadget.speed = USB_SPEED_FULL;
-		usb3->gadget.ep0->maxpacket = USB3_EP0_HSFS_MAX_PACKET_SIZE;
 		break;
 	default:
 		usb3->gadget.speed = USB_SPEED_UNKNOWN;
@@ -1442,7 +1429,7 @@ static void usb3_start_pipen(struct renesas_usb3_ep *usb3_ep,
 			     struct renesas_usb3_request *usb3_req)
 {
 	struct renesas_usb3 *usb3 = usb3_ep_to_usb3(usb3_ep);
-	struct renesas_usb3_request *usb3_req_first;
+	struct renesas_usb3_request *usb3_req_first = usb3_get_request(usb3_ep);
 	unsigned long flags;
 	int ret = -EAGAIN;
 	u32 enable_bits = 0;
@@ -1450,8 +1437,7 @@ static void usb3_start_pipen(struct renesas_usb3_ep *usb3_ep,
 	spin_lock_irqsave(&usb3->lock, flags);
 	if (usb3_ep->halt || usb3_ep->started)
 		goto out;
-	usb3_req_first = __usb3_get_request(usb3_ep);
-	if (!usb3_req_first || usb3_req != usb3_req_first)
+	if (usb3_req != usb3_req_first)
 		goto out;
 
 	if (usb3_pn_change(usb3, usb3_ep->num) < 0)
@@ -2317,9 +2303,9 @@ static ssize_t role_store(struct device *dev, struct device_attribute *attr,
 	if (usb3->forced_b_device)
 		return -EBUSY;
 
-	if (sysfs_streq(buf, "host"))
+	if (!strncmp(buf, "host", strlen("host")))
 		new_mode_is_host = true;
-	else if (sysfs_streq(buf, "peripheral"))
+	else if (!strncmp(buf, "peripheral", strlen("peripheral")))
 		new_mode_is_host = false;
 	else
 		return -EINVAL;
@@ -2372,19 +2358,12 @@ static ssize_t renesas_usb3_b_device_write(struct file *file,
 	if (copy_from_user(&buf, ubuf, min_t(size_t, sizeof(buf) - 1, count)))
 		return -EFAULT;
 
-	usb3->start_to_connect = false;
-	if (usb3->workaround_for_vbus && usb3->forced_b_device &&
-	    !strncmp(buf, "2", 1))
-		usb3->start_to_connect = true;
-	else if (!strncmp(buf, "1", 1))
+	if (!strncmp(buf, "1", 1))
 		usb3->forced_b_device = true;
 	else
 		usb3->forced_b_device = false;
 
-	if (usb3->workaround_for_vbus)
-		usb3_disconnect(usb3);
-
-	/* Let this driver call usb3_connect() if needed */
+	/* Let this driver call usb3_connect() anyway */
 	usb3_check_id(usb3);
 
 	return count;
@@ -2411,12 +2390,8 @@ static void renesas_usb3_debugfs_init(struct renesas_usb3 *usb3,
 
 	file = debugfs_create_file("b_device", 0644, root, usb3,
 				   &renesas_usb3_b_device_fops);
-	if (!file) {
+	if (!file)
 		dev_info(dev, "%s: Can't create debugfs mode\n", __func__);
-		debugfs_remove_recursive(root);
-	} else {
-		usb3->dentry = root;
-	}
 }
 
 /*------- platform_driver ------------------------------------------------*/
@@ -2424,7 +2399,6 @@ static int renesas_usb3_remove(struct platform_device *pdev)
 {
 	struct renesas_usb3 *usb3 = platform_get_drvdata(pdev);
 
-	debugfs_remove_recursive(usb3->dentry);
 	device_remove_file(&pdev->dev, &dev_attr_role);
 
 	usb_del_gadget_udc(&usb3->gadget);
@@ -2471,7 +2445,7 @@ static int renesas_usb3_init_ep(struct renesas_usb3 *usb3, struct device *dev,
 			/* for control pipe */
 			usb3->gadget.ep0 = &usb3_ep->ep;
 			usb_ep_set_maxpacket_limit(&usb3_ep->ep,
-						USB3_EP0_SS_MAX_PACKET_SIZE);
+						USB3_EP0_HSFS_MAX_PACKET_SIZE);
 			usb3_ep->ep.caps.type_control = true;
 			usb3_ep->ep.caps.dir_in = true;
 			usb3_ep->ep.caps.dir_out = true;

@@ -1164,8 +1164,8 @@ static struct ubifs_znode *dirty_cow_bottom_up(struct ubifs_info *c,
  *   o exact match, i.e. the found zero-level znode contains key @key, then %1
  *     is returned and slot number of the matched branch is stored in @n;
  *   o not exact match, which means that zero-level znode does not contain
- *     @key, then %0 is returned and slot number of the closest branch or %-1
- *     is stored in @n; In this case calling tnc_next() is mandatory.
+ *     @key, then %0 is returned and slot number of the closest branch is stored
+ *     in @n;
  *   o @key is so small that it is even less than the lowest key of the
  *     leftmost zero-level node, then %0 is returned and %0 is stored in @n.
  *
@@ -1882,42 +1882,43 @@ int ubifs_tnc_lookup_nm(struct ubifs_info *c, const union ubifs_key *key,
 
 static int search_dh_cookie(struct ubifs_info *c, const union ubifs_key *key,
 			    struct ubifs_dent_node *dent, uint32_t cookie,
-			    struct ubifs_znode **zn, int *n, int exact)
+			    struct ubifs_znode **zn, int *n)
 {
 	int err;
 	struct ubifs_znode *znode = *zn;
 	struct ubifs_zbranch *zbr;
 	union ubifs_key *dkey;
 
-	if (!exact) {
-		err = tnc_next(c, &znode, n);
-		if (err)
-			return err;
-	}
-
 	for (;;) {
+		if (!err) {
+			err = tnc_next(c, &znode, n);
+			if (err)
+				goto out;
+		}
+
 		zbr = &znode->zbranch[*n];
 		dkey = &zbr->key;
 
 		if (key_inum(c, dkey) != key_inum(c, key) ||
 		    key_type(c, dkey) != key_type(c, key)) {
-			return -ENOENT;
+			err = -ENOENT;
+			goto out;
 		}
 
 		err = tnc_read_hashed_node(c, zbr, dent);
 		if (err)
-			return err;
+			goto out;
 
 		if (key_hash(c, key) == key_hash(c, dkey) &&
 		    le32_to_cpu(dent->cookie) == cookie) {
 			*zn = znode;
-			return 0;
+			goto out;
 		}
-
-		err = tnc_next(c, &znode, n);
-		if (err)
-			return err;
 	}
+
+out:
+
+	return err;
 }
 
 static int do_lookup_dh(struct ubifs_info *c, const union ubifs_key *key,
@@ -1936,7 +1937,7 @@ static int do_lookup_dh(struct ubifs_info *c, const union ubifs_key *key,
 	if (unlikely(err < 0))
 		goto out_unlock;
 
-	err = search_dh_cookie(c, key, dent, cookie, &znode, &n, err);
+	err = search_dh_cookie(c, key, dent, cookie, &znode, &n);
 
 out_unlock:
 	mutex_unlock(&c->tnc_mutex);
@@ -2722,7 +2723,7 @@ int ubifs_tnc_remove_dh(struct ubifs_info *c, const union ubifs_key *key,
 		if (unlikely(err < 0))
 			goto out_free;
 
-		err = search_dh_cookie(c, key, dent, cookie, &znode, &n, err);
+		err = search_dh_cookie(c, key, dent, cookie, &znode, &n);
 		if (err)
 			goto out_free;
 	}

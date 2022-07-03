@@ -1032,8 +1032,6 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata,
 	if (local->open_count == 0)
 		ieee80211_clear_tx_pending(local);
 
-	sdata->vif.bss_conf.beacon_int = 0;
-
 	/*
 	 * If the interface goes down while suspended, presumably because
 	 * the device was unplugged and that happens before our resume,
@@ -1127,12 +1125,16 @@ static void ieee80211_set_multicast_list(struct net_device *dev)
  */
 static void ieee80211_teardown_sdata(struct ieee80211_sub_if_data *sdata)
 {
+	int i;
+
 	/* free extra data */
 	ieee80211_free_keys(sdata, false);
 
 	ieee80211_debugfs_remove_netdev(sdata);
 
-	ieee80211_destroy_frag_cache(&sdata->frags);
+	for (i = 0; i < IEEE80211_FRAGMENT_MAX; i++)
+		__skb_queue_purge(&sdata->fragments[i].skb_list);
+	sdata->fragment_next = 0;
 
 	if (ieee80211_vif_is_mesh(&sdata->vif))
 		ieee80211_mesh_teardown_sdata(sdata);
@@ -1491,7 +1493,7 @@ static void ieee80211_setup_sdata(struct ieee80211_sub_if_data *sdata,
 		break;
 	case NL80211_IFTYPE_UNSPECIFIED:
 	case NUM_NL80211_IFTYPES:
-		WARN_ON(1);
+		BUG();
 		break;
 	}
 
@@ -1555,10 +1557,6 @@ static int ieee80211_runtime_change_iftype(struct ieee80211_sub_if_data *sdata,
 	if (ret)
 		return ret;
 
-	ieee80211_stop_vif_queues(local, sdata,
-				  IEEE80211_QUEUE_STOP_REASON_IFTYPE_CHANGE);
-	synchronize_net();
-
 	ieee80211_do_stop(sdata, false);
 
 	ieee80211_teardown_sdata(sdata);
@@ -1579,8 +1577,6 @@ static int ieee80211_runtime_change_iftype(struct ieee80211_sub_if_data *sdata,
 	err = ieee80211_do_open(&sdata->wdev, false);
 	WARN(err, "type change: do_open returned %d", err);
 
-	ieee80211_wake_vif_queues(local, sdata,
-				  IEEE80211_QUEUE_STOP_REASON_IFTYPE_CHANGE);
 	return ret;
 }
 
@@ -1842,7 +1838,8 @@ int ieee80211_if_add(struct ieee80211_local *local, const char *name,
 	sdata->wdev.wiphy = local->hw.wiphy;
 	sdata->local = local;
 
-	ieee80211_init_frag_cache(&sdata->frags);
+	for (i = 0; i < IEEE80211_FRAGMENT_MAX; i++)
+		skb_queue_head_init(&sdata->fragments[i].skb_list);
 
 	INIT_LIST_HEAD(&sdata->key_list);
 
@@ -1924,9 +1921,6 @@ void ieee80211_if_remove(struct ieee80211_sub_if_data *sdata)
 	mutex_lock(&sdata->local->iflist_mtx);
 	list_del_rcu(&sdata->list);
 	mutex_unlock(&sdata->local->iflist_mtx);
-
-	if (sdata->vif.txq)
-		ieee80211_txq_purge(sdata->local, to_txq_info(sdata->vif.txq));
 
 	synchronize_rcu();
 

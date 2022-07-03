@@ -45,9 +45,9 @@ static void free_master_key(struct fscrypt_master_key *mk)
 	wipe_master_key_secret(&mk->mk_secret);
 
 	for (i = 0; i <= __FSCRYPT_MODE_MAX; i++) {
-		fscrypt_destroy_prepared_key(&mk->mk_direct_keys[i]);
-		fscrypt_destroy_prepared_key(&mk->mk_iv_ino_lblk_64_keys[i]);
-		fscrypt_destroy_prepared_key(&mk->mk_iv_ino_lblk_32_keys[i]);
+		crypto_free_skcipher(mk->mk_direct_keys[i]);
+		crypto_free_skcipher(mk->mk_iv_ino_lblk_64_keys[i]);
+		crypto_free_skcipher(mk->mk_iv_ino_lblk_32_keys[i]);
 	}
 
 	key_put(mk->mk_users);
@@ -467,9 +467,6 @@ out_unlock:
 	return err;
 }
 
-/* Size of software "secret" derived from hardware-wrapped key */
-#define RAW_SECRET_SIZE 32
-
 static int add_master_key(struct super_block *sb,
 			  struct fscrypt_master_key_secret *secret,
 			  struct fscrypt_key_specifier *key_spec)
@@ -477,27 +474,16 @@ static int add_master_key(struct super_block *sb,
 	int err;
 
 	if (key_spec->type == FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER) {
-		u8 _kdf_key[RAW_SECRET_SIZE];
-		u8 *kdf_key = secret->raw;
-		unsigned int kdf_key_size = secret->size;
-
-		if (secret->is_hw_wrapped) {
-			kdf_key = _kdf_key;
-			kdf_key_size = RAW_SECRET_SIZE;
-			err = fscrypt_derive_raw_secret(sb, secret->raw,
-							secret->size,
-							kdf_key, kdf_key_size);
-			if (err)
-				return err;
-		}
-		err = fscrypt_init_hkdf(&secret->hkdf, kdf_key, kdf_key_size);
-		/*
-		 * Now that the HKDF context is initialized, the raw HKDF key is
-		 * no longer needed.
-		 */
-		memzero_explicit(kdf_key, kdf_key_size);
+		err = fscrypt_init_hkdf(&secret->hkdf, secret->raw,
+					secret->size);
 		if (err)
 			return err;
+
+		/*
+		 * Now that the HKDF context is initialized, the raw key is no
+		 * longer needed.
+		 */
+		memzero_explicit(secret->raw, secret->size);
 
 		/* Calculate the key identifier */
 		err = fscrypt_hkdf_expand(&secret->hkdf,
@@ -514,10 +500,8 @@ static int fscrypt_provisioning_key_preparse(struct key_preparsed_payload *prep)
 {
 	const struct fscrypt_provisioning_key_payload *payload = prep->data;
 
-	BUILD_BUG_ON(FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE < FSCRYPT_MAX_KEY_SIZE);
-
 	if (prep->datalen < sizeof(*payload) + FSCRYPT_MIN_KEY_SIZE ||
-	    prep->datalen > sizeof(*payload) + FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE)
+	    prep->datalen > sizeof(*payload) + FSCRYPT_MAX_KEY_SIZE)
 		return -EINVAL;
 
 	if (payload->type != FSCRYPT_KEY_SPEC_TYPE_DESCRIPTOR &&
@@ -666,30 +650,15 @@ int fscrypt_ioctl_add_key(struct file *filp, void __user *_uarg)
 		return -EACCES;
 
 	memset(&secret, 0, sizeof(secret));
-
-	if (arg.__flags) {
-		if (arg.__flags & ~__FSCRYPT_ADD_KEY_FLAG_HW_WRAPPED)
-			return -EINVAL;
-		if ((arg.key_spec.type != FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER) &&
-		    (arg.key_spec.type != FSCRYPT_KEY_SPEC_TYPE_DESCRIPTOR))
-			return -EINVAL;
-		secret.is_hw_wrapped = true;
-	}
-
 	if (arg.key_id) {
 		if (arg.raw_size != 0)
 			return -EINVAL;
 		err = get_keyring_key(arg.key_id, arg.key_spec.type, &secret);
 		if (err)
 			goto out_wipe_secret;
-		err = -EINVAL;
-		if (secret.size > FSCRYPT_MAX_KEY_SIZE && !secret.is_hw_wrapped)
-			goto out_wipe_secret;
 	} else {
 		if (arg.raw_size < FSCRYPT_MIN_KEY_SIZE ||
-		    arg.raw_size > (secret.is_hw_wrapped ?
-				    FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE :
-				    FSCRYPT_MAX_KEY_SIZE))
+		    arg.raw_size > FSCRYPT_MAX_KEY_SIZE)
 			return -EINVAL;
 		secret.size = arg.raw_size;
 		err = -EFAULT;
@@ -868,33 +837,11 @@ static int check_for_busy_inodes(struct super_block *sb,
 	return -EBUSY;
 }
 
-static BLOCKING_NOTIFIER_HEAD(fscrypt_key_removal_notifiers);
-
-/*
- * Register a function to be executed when the FS_IOC_REMOVE_ENCRYPTION_KEY
- * ioctl has removed a key and is about to try evicting inodes.
- */
-int fscrypt_register_key_removal_notifier(struct notifier_block *nb)
-{
-	return blocking_notifier_chain_register(&fscrypt_key_removal_notifiers,
-						nb);
-}
-EXPORT_SYMBOL_GPL(fscrypt_register_key_removal_notifier);
-
-int fscrypt_unregister_key_removal_notifier(struct notifier_block *nb)
-{
-	return blocking_notifier_chain_unregister(&fscrypt_key_removal_notifiers,
-						  nb);
-}
-EXPORT_SYMBOL_GPL(fscrypt_unregister_key_removal_notifier);
-
 static int try_to_lock_encrypted_files(struct super_block *sb,
 				       struct fscrypt_master_key *mk)
 {
 	int err1;
 	int err2;
-
-	blocking_notifier_call_chain(&fscrypt_key_removal_notifiers, 0, NULL);
 
 	/*
 	 * An inode can't be evicted while it is dirty or has dirty pages.

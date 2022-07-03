@@ -630,9 +630,10 @@ int vcc_sendmsg(struct socket *sock, struct msghdr *m, size_t size)
 		goto out;
 	}
 	pr_debug("%d += %d\n", sk_wmem_alloc_get(sk), skb->truesize);
-	atm_account_tx(vcc, skb);
+	refcount_add(skb->truesize, &sk->sk_wmem_alloc);
 
 	skb->dev = NULL; /* for paths shared with net_device interfaces */
+	ATM_SKB(skb)->atm_options = vcc->atm_options;
 	if (!copy_from_iter_full(skb_put(skb, size), size, &m->msg_iter)) {
 		kfree_skb(skb);
 		error = -EFAULT;
@@ -667,7 +668,7 @@ unsigned int vcc_poll(struct file *file, struct socket *sock, poll_table *wait)
 		mask |= POLLHUP;
 
 	/* readable? */
-	if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
+	if (!skb_queue_empty(&sk->sk_receive_queue))
 		mask |= POLLIN | POLLRDNORM;
 
 	/* writable? */

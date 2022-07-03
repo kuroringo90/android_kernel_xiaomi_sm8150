@@ -12,7 +12,6 @@
 #include <asm/errno.h>
 #include <asm/ppc_asm.h>
 #include <asm/export.h>
-#include <asm/cache.h>
 
 	.text
 	
@@ -24,7 +23,7 @@ _GLOBAL(strncpy)
 	mtctr	r5
 	addi	r6,r3,-1
 	addi	r4,r4,-1
-	.balign IFETCH_ALIGN_BYTES
+	.balign 16
 1:	lbzu	r0,1(r4)
 	cmpwi	0,r0,0
 	stbu	r0,1(r6)
@@ -44,7 +43,7 @@ _GLOBAL(strncmp)
 	mtctr	r5
 	addi	r5,r3,-1
 	addi	r4,r4,-1
-	.balign IFETCH_ALIGN_BYTES
+	.balign 16
 1:	lbzu	r3,1(r5)
 	cmpwi	1,r3,0
 	lbzu	r0,1(r4)
@@ -78,7 +77,7 @@ _GLOBAL(memchr)
 	beq-	2f
 	mtctr	r5
 	addi	r3,r3,-1
-	.balign IFETCH_ALIGN_BYTES
+	.balign 16
 1:	lbzu	r0,1(r3)
 	cmpw	0,r0,r4
 	bdnzf	2,1b
@@ -88,7 +87,7 @@ _GLOBAL(memchr)
 EXPORT_SYMBOL(memchr)
 
 #ifdef CONFIG_PPC32
-_GLOBAL(__arch_clear_user)
+_GLOBAL(__clear_user)
 	addi	r6,r3,-4
 	li	r3,0
 	li	r5,0
@@ -128,5 +127,5 @@ _GLOBAL(__arch_clear_user)
 	EX_TABLE(1b, 91b)
 	EX_TABLE(8b, 92b)
 
-EXPORT_SYMBOL(__arch_clear_user)
+EXPORT_SYMBOL(__clear_user)
 #endif

@@ -90,7 +90,6 @@ void fsnotify_unmount_inodes(struct super_block *sb)
 
 		iput_inode = inode;
 
-		cond_resched();
 		spin_lock(&sb->s_inode_list_lock);
 	}
 	spin_unlock(&sb->s_inode_list_lock);
@@ -159,9 +158,9 @@ int __fsnotify_parent(const struct path *path, struct dentry *dentry, __u32 mask
 	parent = dget_parent(dentry);
 	p_inode = parent->d_inode;
 
-	if (unlikely(!fsnotify_inode_watches_children(p_inode))) {
+	if (unlikely(!fsnotify_inode_watches_children(p_inode)))
 		__fsnotify_update_child_dentry_flags(p_inode);
-	} else if (p_inode->i_fsnotify_mask & mask & ~FS_EVENT_ON_CHILD) {
+	else if (p_inode->i_fsnotify_mask & mask) {
 		struct name_snapshot name;
 
 		/* we are notifying a parent so come up with the new mask which
@@ -193,9 +192,8 @@ static int send_to_group(struct inode *to_tell,
 			 struct fsnotify_iter_info *iter_info)
 {
 	struct fsnotify_group *group = NULL;
-	__u32 test_mask = (mask & ~FS_EVENT_ON_CHILD);
-	__u32 marks_mask = 0;
-	__u32 marks_ignored_mask = 0;
+	__u32 inode_test_mask = 0;
+	__u32 vfsmount_test_mask = 0;
 
 	if (unlikely(!inode_mark && !vfsmount_mark)) {
 		BUG();
@@ -215,25 +213,29 @@ static int send_to_group(struct inode *to_tell,
 	/* does the inode mark tell us to do something? */
 	if (inode_mark) {
 		group = inode_mark->group;
-		marks_mask |= inode_mark->mask;
-		marks_ignored_mask |= inode_mark->ignored_mask;
+		inode_test_mask = (mask & ~FS_EVENT_ON_CHILD);
+		inode_test_mask &= inode_mark->mask;
+		inode_test_mask &= ~inode_mark->ignored_mask;
 	}
 
 	/* does the vfsmount_mark tell us to do something? */
 	if (vfsmount_mark) {
+		vfsmount_test_mask = (mask & ~FS_EVENT_ON_CHILD);
 		group = vfsmount_mark->group;
-		marks_mask |= vfsmount_mark->mask;
-		marks_ignored_mask |= vfsmount_mark->ignored_mask;
+		vfsmount_test_mask &= vfsmount_mark->mask;
+		vfsmount_test_mask &= ~vfsmount_mark->ignored_mask;
+		if (inode_mark)
+			vfsmount_test_mask &= ~inode_mark->ignored_mask;
 	}
 
 	pr_debug("%s: group=%p to_tell=%p mask=%x inode_mark=%p"
-		 " vfsmount_mark=%p marks_mask=%x marks_ignored_mask=%x"
+		 " inode_test_mask=%x vfsmount_mark=%p vfsmount_test_mask=%x"
 		 " data=%p data_is=%d cookie=%d\n",
-		 __func__, group, to_tell, mask, inode_mark, vfsmount_mark,
-		 marks_mask, marks_ignored_mask, data,
+		 __func__, group, to_tell, mask, inode_mark,
+		 inode_test_mask, vfsmount_mark, vfsmount_test_mask, data,
 		 data_is, cookie);
 
-	if (!(test_mask & marks_mask & ~marks_ignored_mask))
+	if (!inode_test_mask && !vfsmount_test_mask)
 		return 0;
 
 	return group->ops->handle_event(group, to_tell, inode_mark,
@@ -265,10 +267,6 @@ int fsnotify(struct inode *to_tell, __u32 mask, const void *data, int data_is,
 	else
 		mnt = NULL;
 
-	/* An event "on child" is not intended for a mount mark */
-	if (mask & FS_EVENT_ON_CHILD)
-		mnt = NULL;
-
 	/*
 	 * Optimization: srcu_read_lock() has a memory barrier which can
 	 * be expensive.  It protects walking the *_fsnotify_marks lists.
@@ -291,13 +289,17 @@ int fsnotify(struct inode *to_tell, __u32 mask, const void *data, int data_is,
 
 	iter_info.srcu_idx = srcu_read_lock(&fsnotify_mark_srcu);
 
-	inode_conn = srcu_dereference(to_tell->i_fsnotify_marks,
-				      &fsnotify_mark_srcu);
-	if (inode_conn)
-		inode_node = srcu_dereference(inode_conn->list.first,
+	if ((mask & FS_MODIFY) ||
+	    (test_mask & to_tell->i_fsnotify_mask)) {
+		inode_conn = srcu_dereference(to_tell->i_fsnotify_marks,
 					      &fsnotify_mark_srcu);
+		if (inode_conn)
+			inode_node = srcu_dereference(inode_conn->list.first,
+						      &fsnotify_mark_srcu);
+	}
 
-	if (mnt) {
+	if (mnt && ((mask & FS_MODIFY) ||
+		    (test_mask & mnt->mnt_fsnotify_mask))) {
 		inode_conn = srcu_dereference(to_tell->i_fsnotify_marks,
 					      &fsnotify_mark_srcu);
 		if (inode_conn)

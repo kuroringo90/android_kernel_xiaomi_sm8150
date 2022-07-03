@@ -95,9 +95,6 @@ static int p9_xen_create(struct p9_client *client, const char *addr, char *args)
 {
 	struct xen_9pfs_front_priv *priv;
 
-	if (addr == NULL)
-		return -EINVAL;
-
 	read_lock(&xen_9pfs_lock);
 	list_for_each_entry(priv, &xen_9pfs_devs, list) {
 		if (!strcmp(priv->tag, addr)) {
@@ -139,7 +136,7 @@ static bool p9_xen_write_todo(struct xen_9pfs_dataring *ring, RING_IDX size)
 
 static int p9_xen_request(struct p9_client *client, struct p9_req_t *p9_req)
 {
-	struct xen_9pfs_front_priv *priv;
+	struct xen_9pfs_front_priv *priv = NULL;
 	RING_IDX cons, prod, masked_cons, masked_prod;
 	unsigned long flags;
 	u32 size = p9_req->tc->size;
@@ -152,7 +149,7 @@ static int p9_xen_request(struct p9_client *client, struct p9_req_t *p9_req)
 			break;
 	}
 	read_unlock(&xen_9pfs_lock);
-	if (list_entry_is_head(priv, &xen_9pfs_devs, list))
+	if (!priv || priv->client != client)
 		return -EINVAL;
 
 	num = p9_req->tc->tag % priv->num_rings;
@@ -301,9 +298,9 @@ static void xen_9pfs_front_free(struct xen_9pfs_front_priv *priv)
 				ref = priv->rings[i].intf->ref[j];
 				gnttab_end_foreign_access(ref, 0, 0);
 			}
-			free_pages_exact(priv->rings[i].data.in,
-				   1UL << (XEN_9PFS_RING_ORDER +
-					   XEN_PAGE_SHIFT));
+			free_pages((unsigned long)priv->rings[i].data.in,
+				   XEN_9PFS_RING_ORDER -
+				   (PAGE_SHIFT - XEN_PAGE_SHIFT));
 		}
 		gnttab_end_foreign_access(priv->rings[i].ref, 0, 0);
 		free_page((unsigned long)priv->rings[i].intf);
@@ -341,8 +338,8 @@ static int xen_9pfs_front_alloc_dataring(struct xenbus_device *dev,
 	if (ret < 0)
 		goto out;
 	ring->ref = ret;
-	bytes = alloc_pages_exact(1UL << (XEN_9PFS_RING_ORDER + XEN_PAGE_SHIFT),
-				  GFP_KERNEL | __GFP_ZERO);
+	bytes = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO,
+			XEN_9PFS_RING_ORDER - (PAGE_SHIFT - XEN_PAGE_SHIFT));
 	if (!bytes) {
 		ret = -ENOMEM;
 		goto out;
@@ -373,7 +370,9 @@ out:
 	if (bytes) {
 		for (i--; i >= 0; i--)
 			gnttab_end_foreign_access(ring->intf->ref[i], 0, 0);
-		free_pages_exact(bytes, 1UL << (XEN_9PFS_RING_ORDER + XEN_PAGE_SHIFT));
+		free_pages((unsigned long)bytes,
+			   XEN_9PFS_RING_ORDER -
+			   (PAGE_SHIFT - XEN_PAGE_SHIFT));
 	}
 	gnttab_end_foreign_access(ring->ref, 0, 0);
 	free_page((unsigned long)ring->intf);
@@ -390,8 +389,8 @@ static int xen_9pfs_front_probe(struct xenbus_device *dev,
 	unsigned int max_rings, max_ring_order, len = 0;
 
 	versions = xenbus_read(XBT_NIL, dev->otherend, "versions", &len);
-	if (IS_ERR(versions))
-		return PTR_ERR(versions);
+	if (!len)
+		return -EINVAL;
 	if (strcmp(versions, "1")) {
 		kfree(versions);
 		return -EINVAL;
@@ -528,19 +527,13 @@ static struct xenbus_driver xen_9pfs_front_driver = {
 
 static int p9_trans_xen_init(void)
 {
-	int rc;
-
 	if (!xen_domain())
 		return -ENODEV;
 
 	pr_info("Initialising Xen transport for 9pfs\n");
 
 	v9fs_register_trans(&p9_xen_trans);
-	rc = xenbus_register_frontend(&xen_9pfs_front_driver);
-	if (rc)
-		v9fs_unregister_trans(&p9_xen_trans);
-
-	return rc;
+	return xenbus_register_frontend(&xen_9pfs_front_driver);
 }
 module_init(p9_trans_xen_init);
 

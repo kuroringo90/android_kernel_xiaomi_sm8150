@@ -88,8 +88,7 @@ struct kmem_cache {
 	int object_size;	/* The size of an object without meta data */
 	int offset;		/* Free pointer offset. */
 #ifdef CONFIG_SLUB_CPU_PARTIAL
-	/* Number of per cpu partial objects to keep around */
-	unsigned int cpu_partial;
+	int cpu_partial;	/* Number of per cpu partial objects to keep around */
 #endif
 	struct kmem_cache_order_objects oo;
 
@@ -152,12 +151,8 @@ struct kmem_cache {
 
 #ifdef CONFIG_SYSFS
 #define SLAB_SUPPORTS_SYSFS
-void sysfs_slab_unlink(struct kmem_cache *);
 void sysfs_slab_release(struct kmem_cache *);
 #else
-static inline void sysfs_slab_unlink(struct kmem_cache *s)
-{
-}
 static inline void sysfs_slab_release(struct kmem_cache *s)
 {
 }

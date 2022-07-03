@@ -22,7 +22,6 @@
 #include <sys/poll.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <mntent.h>
@@ -172,8 +171,6 @@ int main(int argc, char *argv[])
 			daemonize = 0;
 			break;
 		case 'h':
-			print_usage(argv);
-			exit(0);
 		default:
 			print_usage(argv);
 			exit(EXIT_FAILURE);

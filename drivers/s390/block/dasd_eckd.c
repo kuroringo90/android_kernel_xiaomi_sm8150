@@ -530,12 +530,10 @@ static int prefix_LRE(struct ccw1 *ccw, struct PFX_eckd_data *pfxdata,
 	pfxdata->validity.define_extent = 1;
 
 	/* private uid is kept up to date, conf_data may be outdated */
-	if (startpriv->uid.type == UA_BASE_PAV_ALIAS)
+	if (startpriv->uid.type != UA_BASE_DEVICE) {
 		pfxdata->validity.verify_base = 1;
-
-	if (startpriv->uid.type == UA_HYPER_PAV_ALIAS) {
-		pfxdata->validity.verify_base = 1;
-		pfxdata->validity.hyper_pav = 1;
+		if (startpriv->uid.type == UA_HYPER_PAV_ALIAS)
+			pfxdata->validity.hyper_pav = 1;
 	}
 
 	rc = define_extent(NULL, dedata, trk, totrk, cmd, basedev, blksize);
@@ -1133,8 +1131,7 @@ static u32 get_fcx_max_data(struct dasd_device *device)
 {
 	struct dasd_eckd_private *private = device->private;
 	int fcx_in_css, fcx_in_gneq, fcx_in_features;
-	unsigned int mdc;
-	int tpm;
+	int tpm, mdc;
 
 	if (dasd_nofcx)
 		return 0;
@@ -1148,7 +1145,7 @@ static u32 get_fcx_max_data(struct dasd_device *device)
 		return 0;
 
 	mdc = ccw_device_get_mdc(device->cdev, 0);
-	if (mdc == 0) {
+	if (mdc < 0) {
 		dev_warn(&device->cdev->dev, "Detecting the maximum supported data size for zHPF requests failed\n");
 		return 0;
 	} else {
@@ -1159,12 +1156,12 @@ static u32 get_fcx_max_data(struct dasd_device *device)
 static int verify_fcx_max_data(struct dasd_device *device, __u8 lpm)
 {
 	struct dasd_eckd_private *private = device->private;
-	unsigned int mdc;
+	int mdc;
 	u32 fcx_max_data;
 
 	if (private->fcx_max_data) {
 		mdc = ccw_device_get_mdc(device->cdev, lpm);
-		if (mdc == 0) {
+		if ((mdc < 0)) {
 			dev_warn(&device->cdev->dev,
 				 "Detecting the maximum data size for zHPF "
 				 "requests failed (rc=%d) for a new path %x\n",
@@ -1768,7 +1765,7 @@ out_err2:
 	dasd_free_block(device->block);
 	device->block = NULL;
 out_err1:
-	dasd_eckd_clear_conf_data(device);
+	kfree(private->conf_data);
 	kfree(device->private);
 	device->private = NULL;
 	return rc;
@@ -1777,16 +1774,28 @@ out_err1:
 static void dasd_eckd_uncheck_device(struct dasd_device *device)
 {
 	struct dasd_eckd_private *private = device->private;
-
-	if (!private)
-		return;
+	int i;
 
 	dasd_alias_disconnect_device_from_lcu(device);
 	private->ned = NULL;
 	private->sneq = NULL;
 	private->vdsneq = NULL;
 	private->gneq = NULL;
-	dasd_eckd_clear_conf_data(device);
+	private->conf_len = 0;
+	for (i = 0; i < 8; i++) {
+		kfree(device->path[i].conf_data);
+		if ((__u8 *)device->path[i].conf_data ==
+		    private->conf_data) {
+			private->conf_data = NULL;
+			private->conf_len = 0;
+		}
+		device->path[i].conf_data = NULL;
+		device->path[i].cssid = 0;
+		device->path[i].ssid = 0;
+		device->path[i].chpid = 0;
+	}
+	kfree(private->conf_data);
+	private->conf_data = NULL;
 }
 
 static struct dasd_ccw_req *
@@ -1987,14 +1996,14 @@ static int dasd_eckd_end_analysis(struct dasd_block *block)
 	blk_per_trk = recs_per_track(&private->rdc_data, 0, block->bp_block);
 
 raw:
-	block->blocks = ((unsigned long) private->real_cyl *
+	block->blocks = (private->real_cyl *
 			  private->rdc_data.trk_per_cyl *
 			  blk_per_trk);
 
 	dev_info(&device->cdev->dev,
-		 "DASD with %u KB/block, %lu KB total size, %u KB/track, "
+		 "DASD with %d KB/block, %d KB total size, %d KB/track, "
 		 "%s\n", (block->bp_block >> 10),
-		 (((unsigned long) private->real_cyl *
+		 ((private->real_cyl *
 		   private->rdc_data.trk_per_cyl *
 		   blk_per_trk * (block->bp_block >> 9)) >> 1),
 		 ((blk_per_trk * block->bp_block) >> 10),
@@ -2021,11 +2030,8 @@ static int dasd_eckd_basic_to_ready(struct dasd_device *device)
 
 static int dasd_eckd_online_to_ready(struct dasd_device *device)
 {
-	if (cancel_work_sync(&device->reload_device))
-		dasd_put_device(device);
-	if (cancel_work_sync(&device->kick_validate))
-		dasd_put_device(device);
-
+	cancel_work_sync(&device->reload_device);
+	cancel_work_sync(&device->kick_validate);
 	return 0;
 };
 
@@ -3408,12 +3414,10 @@ static int prepare_itcw(struct itcw *itcw,
 	pfxdata.validity.define_extent = 1;
 
 	/* private uid is kept up to date, conf_data may be outdated */
-	if (startpriv->uid.type == UA_BASE_PAV_ALIAS)
+	if (startpriv->uid.type != UA_BASE_DEVICE) {
 		pfxdata.validity.verify_base = 1;
-
-	if (startpriv->uid.type == UA_HYPER_PAV_ALIAS) {
-		pfxdata.validity.verify_base = 1;
-		pfxdata.validity.hyper_pav = 1;
+		if (startpriv->uid.type == UA_HYPER_PAV_ALIAS)
+			pfxdata.validity.hyper_pav = 1;
 	}
 
 	switch (cmd) {
@@ -4448,14 +4452,6 @@ static int dasd_symm_io(struct dasd_device *device, void __user *argp)
 			goto out;
 		usrparm.psf_data &= 0x7fffffffULL;
 		usrparm.rssd_result &= 0x7fffffffULL;
-	}
-	/* at least 2 bytes are accessed and should be allocated */
-	if (usrparm.psf_data_len < 2) {
-		DBF_DEV_EVENT(DBF_WARNING, device,
-			      "Symmetrix ioctl invalid data length %d",
-			      usrparm.psf_data_len);
-		rc = -EINVAL;
-		goto out;
 	}
 	/* alloc I/O data area */
 	psf_data = kzalloc(usrparm.psf_data_len, GFP_KERNEL | GFP_DMA);

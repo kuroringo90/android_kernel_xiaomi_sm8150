@@ -36,7 +36,6 @@
 #include <asm/xen/hypervisor.h>
 
 #include <xen/xen.h>
-#include <xen/xen-ops.h>
 #include <xen/page.h>
 #include <xen/interface/xen.h>
 #include <xen/interface/memory.h>
@@ -262,3 +261,4 @@ int __init xen_xlate_map_ballooned_pages(xen_pfn_t **gfns, void **virt,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(xen_xlate_map_ballooned_pages);

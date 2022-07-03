@@ -97,9 +97,6 @@ struct calipso_map_cache_entry {
 
 static struct calipso_map_cache_bkt *calipso_cache;
 
-static void calipso_cache_invalidate(void);
-static void calipso_doi_putdef(struct calipso_doi *doi_def);
-
 /* Label Mapping Cache Functions
  */
 
@@ -461,10 +458,15 @@ static int calipso_doi_remove(u32 doi, struct netlbl_audit *audit_info)
 		ret_val = -ENOENT;
 		goto doi_remove_return;
 	}
+	if (!refcount_dec_and_test(&doi_def->refcount)) {
+		spin_unlock(&calipso_doi_list_lock);
+		ret_val = -EBUSY;
+		goto doi_remove_return;
+	}
 	list_del_rcu(&doi_def->list);
 	spin_unlock(&calipso_doi_list_lock);
 
-	calipso_doi_putdef(doi_def);
+	call_rcu(&doi_def->rcu, calipso_doi_free_rcu);
 	ret_val = 0;
 
 doi_remove_return:
@@ -520,8 +522,10 @@ static void calipso_doi_putdef(struct calipso_doi *doi_def)
 
 	if (!refcount_dec_and_test(&doi_def->refcount))
 		return;
+	spin_lock(&calipso_doi_list_lock);
+	list_del_rcu(&doi_def->list);
+	spin_unlock(&calipso_doi_list_lock);
 
-	calipso_cache_invalidate();
 	call_rcu(&doi_def->rcu, calipso_doi_free_rcu);
 }
 
@@ -795,7 +799,8 @@ static int calipso_opt_update(struct sock *sk, struct ipv6_opt_hdr *hop)
 {
 	struct ipv6_txoptions *old = txopt_get(inet6_sk(sk)), *txopts;
 
-	txopts = ipv6_renew_options(sk, old, IPV6_HOPOPTS, hop);
+	txopts = ipv6_renew_options_kern(sk, old, IPV6_HOPOPTS,
+					 hop, hop ? ipv6_optlen(hop) : 0);
 	txopt_put(old);
 	if (IS_ERR(txopts))
 		return PTR_ERR(txopts);
@@ -1057,8 +1062,7 @@ static int calipso_opt_getattr(const unsigned char *calipso,
 			goto getattr_return;
 		}
 
-		if (secattr->attr.mls.cat)
-			secattr->flags |= NETLBL_SECATTR_MLS_CAT;
+		secattr->flags |= NETLBL_SECATTR_MLS_CAT;
 	}
 
 	secattr->type = NETLBL_NLTYPE_CALIPSO;
@@ -1218,7 +1222,8 @@ static int calipso_req_setattr(struct request_sock *req,
 	if (IS_ERR(new))
 		return PTR_ERR(new);
 
-	txopts = ipv6_renew_options(sk, req_inet->ipv6_opt, IPV6_HOPOPTS, new);
+	txopts = ipv6_renew_options_kern(sk, req_inet->ipv6_opt, IPV6_HOPOPTS,
+					 new, new ? ipv6_optlen(new) : 0);
 
 	kfree(new);
 
@@ -1255,7 +1260,8 @@ static void calipso_req_delattr(struct request_sock *req)
 	if (calipso_opt_del(req_inet->ipv6_opt->hopopt, &new))
 		return; /* Nothing to do */
 
-	txopts = ipv6_renew_options(sk, req_inet->ipv6_opt, IPV6_HOPOPTS, new);
+	txopts = ipv6_renew_options_kern(sk, req_inet->ipv6_opt, IPV6_HOPOPTS,
+					 new, new ? ipv6_optlen(new) : 0);
 
 	if (!IS_ERR(txopts)) {
 		txopts = xchg(&req_inet->ipv6_opt, txopts);

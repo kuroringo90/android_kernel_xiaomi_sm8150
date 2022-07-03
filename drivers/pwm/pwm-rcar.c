@@ -156,12 +156,8 @@ static int rcar_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	if (div < 0)
 		return div;
 
-	/*
-	 * Let the core driver set pwm->period if disabled and duty_ns == 0.
-	 * But, this driver should prevent to set the new duty_ns if current
-	 * duty_cycle is not set
-	 */
-	if (!pwm_is_enabled(pwm) && !duty_ns && !pwm->state.duty_cycle)
+	/* Let the core driver set pwm->period if disabled and duty_ns == 0 */
+	if (!pwm_is_enabled(pwm) && !duty_ns)
 		return 0;
 
 	rcar_pwm_update(rp, RCAR_PWMCR_SYNC, RCAR_PWMCR_SYNC, RCAR_PWMCR);
@@ -236,14 +232,13 @@ static int rcar_pwm_probe(struct platform_device *pdev)
 	rcar_pwm->chip.base = -1;
 	rcar_pwm->chip.npwm = 1;
 
-	pm_runtime_enable(&pdev->dev);
-
 	ret = pwmchip_add(&rcar_pwm->chip);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed to register PWM chip: %d\n", ret);
-		pm_runtime_disable(&pdev->dev);
 		return ret;
 	}
+
+	pm_runtime_enable(&pdev->dev);
 
 	return 0;
 }
@@ -251,13 +246,10 @@ static int rcar_pwm_probe(struct platform_device *pdev)
 static int rcar_pwm_remove(struct platform_device *pdev)
 {
 	struct rcar_pwm_chip *rcar_pwm = platform_get_drvdata(pdev);
-	int ret;
-
-	ret = pwmchip_remove(&rcar_pwm->chip);
 
 	pm_runtime_disable(&pdev->dev);
 
-	return ret;
+	return pwmchip_remove(&rcar_pwm->chip);
 }
 
 static const struct of_device_id rcar_pwm_of_table[] = {

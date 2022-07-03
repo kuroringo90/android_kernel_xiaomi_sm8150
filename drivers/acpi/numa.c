@@ -46,7 +46,7 @@ int acpi_numa __initdata;
 
 int pxm_to_node(int pxm)
 {
-	if (pxm < 0 || pxm >= MAX_PXM_DOMAINS || numa_off)
+	if (pxm < 0)
 		return NUMA_NO_NODE;
 	return pxm_to_node_map[pxm];
 }
@@ -103,27 +103,25 @@ int acpi_map_pxm_to_node(int pxm)
  */
 int acpi_map_pxm_to_online_node(int pxm)
 {
-	int node, min_node;
+	int node, n, dist, min_dist;
 
 	node = acpi_map_pxm_to_node(pxm);
 
 	if (node == NUMA_NO_NODE)
 		node = 0;
 
-	min_node = node;
 	if (!node_online(node)) {
-		int min_dist = INT_MAX, dist, n;
-
+		min_dist = INT_MAX;
 		for_each_online_node(n) {
 			dist = node_distance(node, n);
 			if (dist < min_dist) {
 				min_dist = dist;
-				min_node = n;
+				node = n;
 			}
 		}
 	}
 
-	return min_node;
+	return node;
 }
 EXPORT_SYMBOL(acpi_map_pxm_to_online_node);
 
@@ -147,9 +145,9 @@ acpi_table_print_srat_entry(struct acpi_subtable_header *header)
 		{
 			struct acpi_srat_mem_affinity *p =
 			    (struct acpi_srat_mem_affinity *)header;
-			pr_debug("SRAT Memory (0x%llx length 0x%llx) in proximity domain %d %s%s%s\n",
-				 (unsigned long long)p->base_address,
-				 (unsigned long long)p->length,
+			pr_debug("SRAT Memory (0x%lx length 0x%lx) in proximity domain %d %s%s%s\n",
+				 (unsigned long)p->base_address,
+				 (unsigned long)p->length,
 				 p->proximity_domain,
 				 (p->flags & ACPI_SRAT_MEM_ENABLED) ?
 				 "enabled" : "disabled",

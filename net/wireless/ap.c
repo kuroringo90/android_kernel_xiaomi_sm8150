@@ -26,8 +26,8 @@ int __cfg80211_stop_ap(struct cfg80211_registered_device *rdev,
 		return -ENOENT;
 
 	err = rdev_stop_ap(rdev, dev);
-	wdev->beacon_interval = 0;
 	if (!err) {
+		wdev->beacon_interval = 0;
 		memset(&wdev->chandef, 0, sizeof(wdev->chandef));
 		wdev->ssid_len = 0;
 		rdev_set_qos_map(rdev, dev, NULL);
@@ -39,8 +39,6 @@ int __cfg80211_stop_ap(struct cfg80211_registered_device *rdev,
 		 */
 		cfg80211_sched_dfs_chan_update(rdev);
 	}
-
-	schedule_work(&cfg80211_disconnect_work);
 
 	return err;
 }

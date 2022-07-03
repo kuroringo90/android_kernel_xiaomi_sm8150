@@ -61,7 +61,6 @@ struct ib_client_data {
 };
 
 struct workqueue_struct *ib_comp_wq;
-struct workqueue_struct *ib_comp_unbound_wq;
 struct workqueue_struct *ib_wq;
 EXPORT_SYMBOL_GPL(ib_wq);
 
@@ -135,7 +134,7 @@ static int ib_device_check_mandatory(struct ib_device *device)
 	return 0;
 }
 
-static struct ib_device *__ib_device_get_by_index(u32 index)
+struct ib_device *__ib_device_get_by_index(u32 index)
 {
 	struct ib_device *device;
 
@@ -144,22 +143,6 @@ static struct ib_device *__ib_device_get_by_index(u32 index)
 			return device;
 
 	return NULL;
-}
-
-/*
- * Caller is responsible to return refrerence count by calling put_device()
- */
-struct ib_device *ib_device_get_by_index(u32 index)
-{
-	struct ib_device *device;
-
-	down_read(&lists_rwsem);
-	device = __ib_device_get_by_index(index);
-	if (device)
-		get_device(&device->dev);
-
-	up_read(&lists_rwsem);
-	return device;
 }
 
 static struct ib_device *__ib_device_get_by_name(const char *name)
@@ -463,6 +446,7 @@ int ib_register_device(struct ib_device *device,
 	struct ib_udata uhw = {.outlen = 0, .inlen = 0};
 	struct device *parent = device->dev.parent;
 
+	WARN_ON_ONCE(!parent);
 	WARN_ON_ONCE(device->dma_device);
 	if (device->dev.dma_ops) {
 		/*
@@ -471,25 +455,16 @@ int ib_register_device(struct ib_device *device,
 		 * into device->dev.
 		 */
 		device->dma_device = &device->dev;
-		if (!device->dev.dma_mask) {
-			if (parent)
-				device->dev.dma_mask = parent->dma_mask;
-			else
-				WARN_ON_ONCE(true);
-		}
-		if (!device->dev.coherent_dma_mask) {
-			if (parent)
-				device->dev.coherent_dma_mask =
-					parent->coherent_dma_mask;
-			else
-				WARN_ON_ONCE(true);
-		}
+		if (!device->dev.dma_mask)
+			device->dev.dma_mask = parent->dma_mask;
+		if (!device->dev.coherent_dma_mask)
+			device->dev.coherent_dma_mask =
+				parent->coherent_dma_mask;
 	} else {
 		/*
 		 * The caller did not provide custom DMA operations. Use the
 		 * DMA mapping operations of the parent device.
 		 */
-		WARN_ON_ONCE(!parent);
 		device->dma_device = parent;
 	}
 
@@ -535,14 +510,14 @@ int ib_register_device(struct ib_device *device,
 	ret = device->query_device(device, &device->attrs, &uhw);
 	if (ret) {
 		pr_warn("Couldn't query the device attributes\n");
-		goto cg_cleanup;
+		goto cache_cleanup;
 	}
 
 	ret = ib_device_register_sysfs(device, port_callback);
 	if (ret) {
 		pr_warn("Couldn't register device %s with driver model\n",
 			device->name);
-		goto cg_cleanup;
+		goto cache_cleanup;
 	}
 
 	device->reg_state = IB_DEV_REGISTERED;
@@ -558,8 +533,6 @@ int ib_register_device(struct ib_device *device,
 	mutex_unlock(&device_mutex);
 	return 0;
 
-cg_cleanup:
-	ib_device_unregister_rdmacg(device);
 cache_cleanup:
 	ib_cache_cleanup_one(device);
 	ib_cache_release_one(device);
@@ -599,8 +572,8 @@ void ib_unregister_device(struct ib_device *device)
 	}
 	up_read(&lists_rwsem);
 
-	ib_device_unregister_sysfs(device);
 	ib_device_unregister_rdmacg(device);
+	ib_device_unregister_sysfs(device);
 
 	mutex_unlock(&device_mutex);
 
@@ -1075,8 +1048,7 @@ int ib_find_gid(struct ib_device *device, union ib_gid *gid,
 		for (i = 0; i < device->port_immutable[port].gid_tbl_len; ++i) {
 			ret = ib_query_gid(device, port, i, &tmp_gid, NULL);
 			if (ret)
-				continue;
-
+				return ret;
 			if (!memcmp(&tmp_gid, gid, sizeof *gid)) {
 				*port_num = port;
 				if (index)
@@ -1174,7 +1146,7 @@ struct net_device *ib_get_net_dev_by_params(struct ib_device *dev,
 }
 EXPORT_SYMBOL(ib_get_net_dev_by_params);
 
-static const struct rdma_nl_cbs ibnl_ls_cb_table[RDMA_NL_LS_NUM_OPS] = {
+static const struct rdma_nl_cbs ibnl_ls_cb_table[] = {
 	[RDMA_NL_LS_OP_RESOLVE] = {
 		.doit = ib_nl_handle_resolve_resp,
 		.flags = RDMA_NL_ADMIN_PERM,
@@ -1204,19 +1176,10 @@ static int __init ib_core_init(void)
 		goto err;
 	}
 
-	ib_comp_unbound_wq =
-		alloc_workqueue("ib-comp-unb-wq",
-				WQ_UNBOUND | WQ_HIGHPRI | WQ_MEM_RECLAIM |
-				WQ_SYSFS, WQ_UNBOUND_MAX_ACTIVE);
-	if (!ib_comp_unbound_wq) {
-		ret = -ENOMEM;
-		goto err_comp;
-	}
-
 	ret = class_register(&ib_class);
 	if (ret) {
 		pr_warn("Couldn't create InfiniBand device class\n");
-		goto err_comp_unbound;
+		goto err_comp;
 	}
 
 	ret = rdma_nl_init();
@@ -1265,8 +1228,6 @@ err_ibnl:
 	rdma_nl_exit();
 err_sysfs:
 	class_unregister(&ib_class);
-err_comp_unbound:
-	destroy_workqueue(ib_comp_unbound_wq);
 err_comp:
 	destroy_workqueue(ib_comp_wq);
 err:
@@ -1285,7 +1246,6 @@ static void __exit ib_core_cleanup(void)
 	addr_cleanup();
 	rdma_nl_exit();
 	class_unregister(&ib_class);
-	destroy_workqueue(ib_comp_unbound_wq);
 	destroy_workqueue(ib_comp_wq);
 	/* Make sure that any pending umem accounting work is done. */
 	destroy_workqueue(ib_wq);
@@ -1293,5 +1253,5 @@ static void __exit ib_core_cleanup(void)
 
 MODULE_ALIAS_RDMA_NETLINK(RDMA_NL_LS, 4);
 
-subsys_initcall(ib_core_init);
+module_init(ib_core_init);
 module_exit(ib_core_cleanup);

@@ -184,8 +184,6 @@ struct ssif_addr_info {
 	struct device *dev;
 	struct i2c_client *client;
 
-	struct i2c_client *added_client;
-
 	struct mutex clients_mutex;
 	struct list_head clients;
 
@@ -621,9 +619,8 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 			flags = ipmi_ssif_lock_cond(ssif_info, &oflags);
 			ssif_info->waiting_alert = true;
 			ssif_info->rtc_us_timer = SSIF_MSG_USEC;
-			if (!ssif_info->stopping)
-				mod_timer(&ssif_info->retry_timer,
-					  jiffies + SSIF_MSG_JIFFIES);
+			mod_timer(&ssif_info->retry_timer,
+				  jiffies + SSIF_MSG_JIFFIES);
 			ipmi_ssif_unlock_cond(ssif_info, flags);
 			return;
 		}
@@ -645,9 +642,8 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 
 		/* Remove the multi-part read marker. */
 		len -= 2;
-		data += 2;
 		for (i = 0; i < len; i++)
-			ssif_info->data[i] = data[i];
+			ssif_info->data[i] = data[i+2];
 		ssif_info->multi_len = len;
 		ssif_info->multi_pos = 1;
 
@@ -675,19 +671,8 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 		}
 
 		blocknum = data[0];
-		len--;
-		data++;
 
-		if (blocknum != 0xff && len != 31) {
-		    /* All blocks but the last must have 31 data bytes. */
-			result = -EIO;
-			if (ssif_info->ssif_debug & SSIF_DEBUG_MSG)
-				pr_info("Received middle message <31\n");
-
-			goto continue_op;
-		}
-
-		if (ssif_info->multi_len + len > IPMI_MAX_MSG_LENGTH) {
+		if (ssif_info->multi_len + len - 1 > IPMI_MAX_MSG_LENGTH) {
 			/* Received message too big, abort the operation. */
 			result = -E2BIG;
 			if (ssif_info->ssif_debug & SSIF_DEBUG_MSG)
@@ -696,8 +681,10 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 			goto continue_op;
 		}
 
+		/* Remove the blocknum from the data. */
+		len--;
 		for (i = 0; i < len; i++)
-			ssif_info->data[i + ssif_info->multi_len] = data[i];
+			ssif_info->data[i + ssif_info->multi_len] = data[i + 1];
 		ssif_info->multi_len += len;
 		if (blocknum == 0xff) {
 			/* End of read */
@@ -709,10 +696,6 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 			 * numbers start at zero for the second block,
 			 * but multi_pos starts at one, so the +1.
 			 */
-			if (ssif_info->ssif_debug & SSIF_DEBUG_MSG)
-				dev_dbg(&ssif_info->client->dev,
-					"Received message out of sequence, expected %u, got %u\n",
-					ssif_info->multi_pos - 1, blocknum);
 			result = -EIO;
 		} else {
 			ssif_inc_stat(ssif_info, received_message_parts);
@@ -735,7 +718,6 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 		}
 	}
 
- continue_op:
 	if (result < 0) {
 		ssif_inc_stat(ssif_info, receive_errors);
 	} else {
@@ -743,6 +725,8 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 		ssif_inc_stat(ssif_info, received_message_parts);
 	}
 
+
+ continue_op:
 	if (ssif_info->ssif_debug & SSIF_DEBUG_STATE)
 		pr_info(PFX "DONE 1: state = %d, result=%d.\n",
 			ssif_info->ssif_state, result);
@@ -750,14 +734,10 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 	flags = ipmi_ssif_lock_cond(ssif_info, &oflags);
 	msg = ssif_info->curr_msg;
 	if (msg) {
-		if (data) {
-			if (len > IPMI_MAX_MSG_LENGTH)
-				len = IPMI_MAX_MSG_LENGTH;
-			memcpy(msg->rsp, data, len);
-		} else {
-			len = 0;
-		}
 		msg->rsp_size = len;
+		if (msg->rsp_size > IPMI_MAX_MSG_LENGTH)
+			msg->rsp_size = IPMI_MAX_MSG_LENGTH;
+		memcpy(msg->rsp, data, msg->rsp_size);
 		ssif_info->curr_msg = NULL;
 	}
 
@@ -783,7 +763,7 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 			ssif_info->ssif_state = SSIF_NORMAL;
 			ipmi_ssif_unlock_cond(ssif_info, flags);
 			pr_warn(PFX "Error getting flags: %d %d, %x\n",
-			       result, len, (len >= 3) ? data[2] : 0);
+			       result, len, data[2]);
 		} else if (data[0] != (IPMI_NETFN_APP_REQUEST | 1) << 2
 			   || data[1] != IPMI_GET_MSG_FLAGS_CMD) {
 			/*
@@ -805,7 +785,7 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 		if ((result < 0) || (len < 3) || (data[2] != 0)) {
 			/* Error clearing flags */
 			pr_warn(PFX "Error clearing flags: %d %d, %x\n",
-			       result, len, (len >= 3) ? data[2] : 0);
+			       result, len, data[2]);
 		} else if (data[0] != (IPMI_NETFN_APP_REQUEST | 1) << 2
 			   || data[1] != IPMI_CLEAR_MSG_FLAGS_CMD) {
 			pr_warn(PFX "Invalid response clearing flags: %x %x\n",
@@ -816,14 +796,6 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 		break;
 
 	case SSIF_GETTING_EVENTS:
-		if (!msg) {
-			/* Should never happen, but just in case. */
-			dev_warn(&ssif_info->client->dev,
-				 "No message set while getting events\n");
-			ipmi_ssif_unlock_cond(ssif_info, flags);
-			break;
-		}
-
 		if ((result < 0) || (len < 3) || (msg->rsp[2] != 0)) {
 			/* Error getting event, probably done. */
 			msg->done(msg);
@@ -847,14 +819,6 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 		break;
 
 	case SSIF_GETTING_MESSAGES:
-		if (!msg) {
-			/* Should never happen, but just in case. */
-			dev_warn(&ssif_info->client->dev,
-				 "No message set while getting messages\n");
-			ipmi_ssif_unlock_cond(ssif_info, flags);
-			break;
-		}
-
 		if ((result < 0) || (len < 3) || (msg->rsp[2] != 0)) {
 			/* Error getting event, probably done. */
 			msg->done(msg);
@@ -877,13 +841,6 @@ static void msg_done_handler(struct ssif_info *ssif_info, int result,
 			deliver_recv_msg(ssif_info, msg);
 		}
 		break;
-
-	default:
-		/* Should never happen, but just in case. */
-		dev_warn(&ssif_info->client->dev,
-			 "Invalid state in message done handling: %d\n",
-			 ssif_info->ssif_state);
-		ipmi_ssif_unlock_cond(ssif_info, flags);
 	}
 
 	flags = ipmi_ssif_lock_cond(ssif_info, &oflags);
@@ -995,9 +952,8 @@ static void msg_written_handler(struct ssif_info *ssif_info, int result,
 			ssif_info->waiting_alert = true;
 			ssif_info->retries_left = SSIF_RECV_RETRIES;
 			ssif_info->rtc_us_timer = SSIF_MSG_PART_USEC;
-			if (!ssif_info->stopping)
-				mod_timer(&ssif_info->retry_timer,
-					  jiffies + SSIF_MSG_PART_JIFFIES);
+			mod_timer(&ssif_info->retry_timer,
+				  jiffies + SSIF_MSG_PART_JIFFIES);
 			ipmi_ssif_unlock_cond(ssif_info, flags);
 		}
 	}
@@ -1754,9 +1710,15 @@ static int ssif_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
  out:
 	if (rv) {
-		if (addr_info)
-			addr_info->client = NULL;
-
+		/*
+		 * Note that if addr_info->client is assigned, we
+		 * leave it.  The i2c client hangs around even if we
+		 * return a failure here, and the failure here is not
+		 * propagated back to the i2c code.  This seems to be
+		 * design intent, strange as it may be.  But if we
+		 * don't leave it, ssif_platform_remove will not remove
+		 * the client like it should.
+		 */
 		dev_err(&client->dev, "Unable to start IPMI SSIF: %d\n", rv);
 		kfree(ssif_info);
 	}
@@ -1775,8 +1737,7 @@ static int ssif_adapter_handler(struct device *adev, void *opaque)
 	if (adev->type != &i2c_adapter_type)
 		return 0;
 
-	addr_info->added_client = i2c_new_device(to_i2c_adapter(adev),
-						 &addr_info->binfo);
+	i2c_new_device(to_i2c_adapter(adev), &addr_info->binfo);
 
 	if (!addr_info->adapter_name)
 		return 1; /* Only try the first I2C adapter by default. */
@@ -2057,8 +2018,8 @@ static int ssif_platform_remove(struct platform_device *dev)
 		return 0;
 
 	mutex_lock(&ssif_infos_mutex);
-	if (addr_info->added_client)
-		i2c_unregister_device(addr_info->added_client);
+	if (addr_info->client)
+		i2c_unregister_device(addr_info->client);
 
 	list_del(&addr_info->link);
 	kfree(addr_info);

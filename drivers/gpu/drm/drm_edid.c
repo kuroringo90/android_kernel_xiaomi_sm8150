@@ -96,14 +96,6 @@ struct detailed_mode_closure {
 #define LEVEL_GTF2	2
 #define LEVEL_CVT	3
 
-/*Enum storing luminance types for HDR blocks in EDID*/
-enum luminance_value {
-	NO_LUMINANCE_DATA = 3,
-	MAXIMUM_LUMINANCE = 4,
-	FRAME_AVERAGE_LUMINANCE = 5,
-	MINIMUM_LUMINANCE = 6
-};
-
 static const struct edid_quirk {
 	char vendor[4];
 	int product_id;
@@ -118,18 +110,6 @@ static const struct edid_quirk {
 
 	/* AEO model 0 reports 8 bpc, but is a 6 bpc panel */
 	{ "AEO", 0, EDID_QUIRK_FORCE_6BPC },
-
-	/* BOE model on HP Pavilion 15-n233sl reports 8 bpc, but is a 6 bpc panel */
-	{ "BOE", 0x78b, EDID_QUIRK_FORCE_6BPC },
-
-	/* CPT panel of Asus UX303LA reports 8 bpc, but is a 6 bpc panel */
-	{ "CPT", 0x17df, EDID_QUIRK_FORCE_6BPC },
-
-	/* SDC panel of Lenovo B50-80 reports 8 bpc, but is a 6 bpc panel */
-	{ "SDC", 0x3652, EDID_QUIRK_FORCE_6BPC },
-
-	/* BOE model 0x0771 reports 8 bpc, but is a 6 bpc panel */
-	{ "BOE", 0x0771, EDID_QUIRK_FORCE_6BPC },
 
 	/* Belinea 10 15 55 */
 	{ "MAX", 1516, EDID_QUIRK_PREFER_LARGE_60 },
@@ -172,9 +152,6 @@ static const struct edid_quirk {
 	/* Medion MD 30217 PG */
 	{ "MED", 0x7b8, EDID_QUIRK_PREFER_LARGE_75 },
 
-	/* Lenovo G50 */
-	{ "SDC", 18514, EDID_QUIRK_FORCE_6BPC },
-
 	/* Panel in Samsung NP700G7A-S01PL notebook reports 6bpc */
 	{ "SEC", 0xd033, EDID_QUIRK_FORCE_8BPC },
 
@@ -206,8 +183,7 @@ static const struct drm_display_mode drm_dmt_modes[] = {
 	/* 0x05 - 640x480@72Hz */
 	{ DRM_MODE("640x480", DRM_MODE_TYPE_DRIVER, 31500, 640, 664,
 		   704, 832, 0, 480, 489, 492, 520, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC),
-		   .vrefresh = 72, },
+		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC) },
 	/* 0x06 - 640x480@75Hz */
 	{ DRM_MODE("640x480", DRM_MODE_TYPE_DRIVER, 31500, 640, 656,
 		   720, 840, 0, 480, 481, 484, 500, 0,
@@ -564,8 +540,7 @@ static const struct drm_display_mode edid_est_modes[] = {
 		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC) }, /* 640x480@75Hz */
 	{ DRM_MODE("640x480", DRM_MODE_TYPE_DRIVER, 31500, 640, 664,
 		   704,  832, 0, 480, 489, 492, 520, 0,
-		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC),
-		   .vrefresh = 72, }, /* 640x480@72Hz */
+		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC) }, /* 640x480@72Hz */
 	{ DRM_MODE("640x480", DRM_MODE_TYPE_DRIVER, 30240, 640, 704,
 		   768,  864, 0, 480, 483, 486, 525, 0,
 		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC) }, /* 640x480@67Hz */
@@ -2801,14 +2776,12 @@ add_detailed_modes(struct drm_connector *connector, struct edid *edid,
 
 	return closure.modes;
 }
-#define VIDEO_CAPABILITY_EXTENDED_DATA_BLOCK 0x0
+
 #define AUDIO_BLOCK	0x01
 #define VIDEO_BLOCK     0x02
 #define VENDOR_BLOCK    0x03
 #define SPEAKER_BLOCK	0x04
-#define HDR_STATIC_METADATA_EXTENDED_DATA_BLOCK 0x06
 #define USE_EXTENDED_TAG 0x07
-#define VIDEO_CAPABILITY_BLOCK	0x07
 #define EXT_VIDEO_CAPABILITY_BLOCK 0x00
 #define EXT_VIDEO_DATA_BLOCK_420	0x0E
 #define EXT_VIDEO_CAP_BLOCK_Y420CMDB 0x0F
@@ -3794,227 +3767,6 @@ drm_parse_hdmi_vsdb_audio(struct drm_connector *connector, const u8 *db)
 		      connector->audio_latency[1]);
 }
 
-static u8 *
-drm_edid_find_extended_tag_block(struct edid *edid, int blk_id)
-{
-	u8 *db = NULL;
-	u8 *cea = NULL;
-
-	if (!edid)
-		return NULL;
-
-	cea = drm_find_cea_extension(edid);
-
-	if (cea && cea_revision(cea) >= 3) {
-		int i, start, end;
-
-		if (cea_db_offsets(cea, &start, &end))
-			return NULL;
-
-		for_each_cea_db(cea, i, start, end) {
-			db = &cea[i];
-			if ((cea_db_tag(db) == USE_EXTENDED_TAG) &&
-				(db[1] == blk_id))
-				return db;
-		}
-	}
-	return NULL;
-}
-
-/*
- * add_YCbCr420VDB_modes - add the modes found in Ycbcr420 VDB block
- * @connector: connector corresponding to the HDMI sink
- * @edid: handle to the EDID structure
- * Parses the YCbCr420 VDB block and adds the modes to @connector.
- */
-static int
-add_YCbCr420VDB_modes(struct drm_connector *connector, struct edid *edid)
-{
-
-	const u8 *db = NULL;
-	u32 i = 0;
-	u32 modes = 0;
-	u32 video_format = 0;
-	u8 len = 0;
-
-	/*Find the YCbCr420 VDB*/
-	db = drm_edid_find_extended_tag_block(edid, EXT_VIDEO_DATA_BLOCK_420);
-	/* Offset to byte 3 */
-	if (db) {
-		len = db[0] & 0x1F;
-		db += 2;
-		for (i = 0; i < len - 1; i++) {
-			struct drm_display_mode *mode;
-
-			video_format = *(db + i) & 0x7F;
-			mode = drm_display_mode_from_vic_index(connector,
-					db, len-1, i);
-			if (mode) {
-				DRM_DEBUG_KMS("Adding mode for vic = %d\n",
-				video_format);
-				drm_mode_probed_add(connector, mode);
-				modes++;
-			}
-		}
-	}
-	return modes;
-}
-
-/*
- * drm_extract_vcdb_info - Parse the HDMI Video Capability Data Block
- * @connector: connector corresponding to the HDMI sink
- * @db: start of the CEA vendor specific block
- *
- * Parses the HDMI VCDB to extract sink info for @connector.
- */
-static void
-drm_extract_vcdb_info(struct drm_connector *connector, const u8 *db)
-{
-	/*
-	 * Check if the sink specifies underscan
-	 * support for:
-	 * BIT 5: preferred video format
-	 * BIT 3: IT video format
-	 * BIT 1: CE video format
-	 */
-
-	connector->pt_scan_info =
-		(db[2] & (BIT(4) | BIT(5))) >> 4;
-	connector->it_scan_info =
-		(db[2] & (BIT(3) | BIT(2))) >> 2;
-	connector->ce_scan_info =
-		db[2] & (BIT(1) | BIT(0));
-
-	DRM_DEBUG_KMS("Scan Info (pt|it|ce): (%d|%d|%d)",
-			  (int) connector->pt_scan_info,
-			  (int) connector->it_scan_info,
-			  (int) connector->ce_scan_info);
-}
-
-static bool drm_edid_is_luminance_value_present(
-u32 block_length, enum luminance_value value)
-{
-	return block_length > NO_LUMINANCE_DATA && value <= block_length;
-}
-
-/*
- * drm_extract_hdr_db - Parse the HDMI HDR extended block
- * @connector: connector corresponding to the HDMI sink
- * @db: start of the HDMI HDR extended block
- *
- * Parses the HDMI HDR extended block to extract sink info for @connector.
- */
-static void
-drm_extract_hdr_db(struct drm_connector *connector, const u8 *db)
-{
-
-	u8 len = 0;
-
-	if (!db)
-		return;
-
-	len = db[0] & 0x1f;
-	/* Byte 3: Electro-Optical Transfer Functions */
-	connector->hdr_eotf = db[2] & 0x3F;
-
-	/* Byte 4: Static Metadata Descriptor Type 1 */
-	connector->hdr_metadata_type_one = (db[3] & BIT(0));
-
-	/* Byte 5: Desired Content Maximum Luminance */
-	if (drm_edid_is_luminance_value_present(len, MAXIMUM_LUMINANCE))
-		connector->hdr_max_luminance =
-			db[MAXIMUM_LUMINANCE];
-
-	/* Byte 6: Desired Content Max Frame-average Luminance */
-	if (drm_edid_is_luminance_value_present(len, FRAME_AVERAGE_LUMINANCE))
-		connector->hdr_avg_luminance =
-			db[FRAME_AVERAGE_LUMINANCE];
-
-	/* Byte 7: Desired Content Min Luminance */
-	if (drm_edid_is_luminance_value_present(len, MINIMUM_LUMINANCE))
-		connector->hdr_min_luminance =
-			db[MINIMUM_LUMINANCE];
-
-	connector->hdr_supported = true;
-
-	DRM_DEBUG_KMS("HDR electro-optical %d\n", connector->hdr_eotf);
-	DRM_DEBUG_KMS("metadata desc 1 %d\n", connector->hdr_metadata_type_one);
-	DRM_DEBUG_KMS("max luminance %d\n", connector->hdr_max_luminance);
-	DRM_DEBUG_KMS("avg luminance %d\n", connector->hdr_avg_luminance);
-	DRM_DEBUG_KMS("min luminance %d\n", connector->hdr_min_luminance);
-}
-
-/*
- * drm_hdmi_extract_extended_blk_info - Parse the HDMI extended tag blocks
- * @connector: connector corresponding to the HDMI sink
- * @edid: handle to the EDID structure
- * Parses the all extended tag blocks extract sink info for @connector.
- */
-static void
-drm_hdmi_extract_extended_blk_info(struct drm_connector *connector,
-		struct edid *edid)
-{
-	const u8 *cea = drm_find_cea_extension(edid);
-	const u8 *db = NULL;
-
-	if (cea && cea_revision(cea) >= 3) {
-		int i, start, end;
-
-		if (cea_db_offsets(cea, &start, &end))
-			return;
-
-		for_each_cea_db(cea, i, start, end) {
-			db = &cea[i];
-
-			if (cea_db_tag(db) == USE_EXTENDED_TAG) {
-				DRM_DEBUG_KMS("found extended tag block = %d\n",
-						db[1]);
-				switch (db[1]) {
-				case VIDEO_CAPABILITY_EXTENDED_DATA_BLOCK:
-					drm_extract_vcdb_info(connector, db);
-					break;
-				case HDR_STATIC_METADATA_EXTENDED_DATA_BLOCK:
-					drm_extract_hdr_db(connector, db);
-					break;
-				default:
-					break;
-				}
-			}
-		}
-	}
-}
-
-static void
-parse_hdmi_hf_vsdb(struct drm_connector *connector, const u8 *db)
-{
-	u8 len = cea_db_payload_len(db);
-
-	if (len < 7)
-		return;
-
-	if (db[4] != 1)
-		return; /* invalid version */
-
-	connector->max_tmds_char = db[5] * 5;
-	connector->scdc_present = db[6] & (1 << 7);
-	connector->rr_capable = db[6] & (1 << 6);
-	connector->flags_3d = db[6] & 0x7;
-	connector->supports_scramble = connector->scdc_present &&
-			(db[6] & (1 << 3));
-
-	DRM_DEBUG_KMS("HDMI v2: max TMDS char %d, "
-			"scdc %s, "
-			"rr %s, "
-			"3D flags 0x%x, "
-			"scramble %s\n",
-			connector->max_tmds_char,
-			connector->scdc_present ? "available" : "not available",
-			connector->rr_capable ? "capable" : "not capable",
-			connector->flags_3d,
-			connector->supports_scramble ?
-				"supported" : "not supported");
-}
-
 static void
 monitor_name(struct detailed_timing *t, void *data)
 {
@@ -4052,7 +3804,7 @@ void drm_edid_get_monitor_name(struct edid *edid, char *name, int bufsize)
 {
 	int name_length;
 	char buf[13];
-
+	
 	if (bufsize <= 0)
 		return;
 
@@ -4068,7 +3820,8 @@ EXPORT_SYMBOL(drm_edid_get_monitor_name);
  * @edid: EDID to parse
  *
  * Fill the ELD (EDID-Like Data) buffer for passing to the audio driver. The
- * HDCP and Port_ID ELD fields are left for the graphics driver to fill in.
+ * Conn_Type, HDCP and Port_ID ELD fields are left for the graphics driver to
+ * fill in.
  */
 void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
 {
@@ -4141,9 +3894,6 @@ void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
 				/* HDMI Vendor-Specific Data Block */
 				if (cea_db_is_hdmi_vsdb(db))
 					drm_parse_hdmi_vsdb_audio(connector, db);
-				/* HDMI Forum Vendor-Specific Data Block */
-				else if (cea_db_is_hdmi_forum_vsdb(db))
-					parse_hdmi_hf_vsdb(connector, db);
 				break;
 			default:
 				break;
@@ -4151,12 +3901,6 @@ void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
 		}
 	}
 	eld[5] |= total_sad_count << 4;
-
-	if (connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort ||
-	    connector->connector_type == DRM_MODE_CONNECTOR_eDP)
-		eld[DRM_ELD_SAD_COUNT_CONN_TYPE] |= DRM_ELD_CONN_TYPE_DP;
-	else
-		eld[DRM_ELD_SAD_COUNT_CONN_TYPE] |= DRM_ELD_CONN_TYPE_HDMI;
 
 	eld[DRM_ELD_BASELINE_ELD_LEN] =
 		DIV_ROUND_UP(drm_eld_calc_baseline_block_size(eld), 4);
@@ -4465,7 +4209,7 @@ static void drm_parse_ycbcr420_deep_color_info(struct drm_connector *connector,
 	struct drm_hdmi_info *hdmi = &connector->display_info.hdmi;
 
 	dc_mask = db[7] & DRM_EDID_YCBCR420_DC_MASK;
-	hdmi->y420_dc_modes = dc_mask;
+	hdmi->y420_dc_modes |= dc_mask;
 }
 
 static void drm_parse_hdmi_forum_vsdb(struct drm_connector *connector,
@@ -4555,8 +4299,16 @@ static void drm_parse_hdmi_deep_color_info(struct drm_connector *connector,
 		  connector->name, dc_bpc);
 	info->bpc = dc_bpc;
 
+	/*
+	 * Deep color support mandates RGB444 support for all video
+	 * modes and forbids YCRCB422 support for all video modes per
+	 * HDMI 1.3 spec.
+	 */
+	info->color_formats = DRM_COLOR_FORMAT_RGB444;
+
 	/* YCRCB444 is optional according to spec. */
 	if (hdmi[6] & DRM_EDID_HDMI_DC_Y444) {
+		info->color_formats |= DRM_COLOR_FORMAT_YCRCB444;
 		DRM_DEBUG("%s: HDMI sink does YCRCB444 in deep color.\n",
 			  connector->name);
 	}
@@ -4625,37 +4377,6 @@ static void drm_parse_cea_ext(struct drm_connector *connector,
 	}
 }
 
-static void
-drm_hdmi_extract_vsdbs_info(struct drm_connector *connector, struct edid *edid)
-{
-	const u8 *cea = drm_find_cea_extension(edid);
-	const u8 *db = NULL;
-
-	if (cea && cea_revision(cea) >= 3) {
-		int i, start, end;
-
-		if (cea_db_offsets(cea, &start, &end))
-			return;
-
-		for_each_cea_db(cea, i, start, end) {
-			db = &cea[i];
-
-			if (cea_db_tag(db) == VENDOR_BLOCK) {
-				/* HDMI Vendor-Specific Data Block */
-				if (cea_db_is_hdmi_vsdb(db)) {
-					drm_parse_hdmi_vsdb_video(
-						connector, db);
-					drm_parse_hdmi_vsdb_audio(
-						connector, db);
-				}
-				/* HDMI Forum Vendor-Specific Data Block */
-				else if (cea_db_is_hdmi_forum_vsdb(db))
-					parse_hdmi_hf_vsdb(connector, db);
-			}
-		}
-	}
-}
-
 static void drm_add_display_info(struct drm_connector *connector,
 				 struct edid *edid)
 {
@@ -4677,7 +4398,6 @@ static void drm_add_display_info(struct drm_connector *connector,
 	if (!(edid->input & DRM_EDID_INPUT_DIGITAL))
 		return;
 
-	info->color_formats |= DRM_COLOR_FORMAT_RGB444;
 	drm_parse_cea_ext(connector, edid);
 
 	/*
@@ -4693,11 +4413,6 @@ static void drm_add_display_info(struct drm_connector *connector,
 		DRM_DEBUG("%s: Assigning DFP sink color depth as %d bpc.\n",
 			  connector->name, info->bpc);
 	}
-
-	/* Extract audio and video latency fields for the sink */
-	drm_hdmi_extract_vsdbs_info(connector, edid);
-	/* Extract info from extended tag blocks */
-	drm_hdmi_extract_extended_blk_info(connector, edid);
 
 	/* Only defined for 1.4 with digital displays */
 	if (edid->revision < 4)
@@ -4731,6 +4446,7 @@ static void drm_add_display_info(struct drm_connector *connector,
 	DRM_DEBUG("%s: Assigning EDID-1.4 digital sink color depth as %d bpc.\n",
 			  connector->name, info->bpc);
 
+	info->color_formats |= DRM_COLOR_FORMAT_RGB444;
 	if (edid->features & DRM_EDID_FEATURE_RGB_YCRCB444)
 		info->color_formats |= DRM_COLOR_FORMAT_YCRCB444;
 	if (edid->features & DRM_EDID_FEATURE_RGB_YCRCB422)
@@ -4766,7 +4482,7 @@ static struct drm_display_mode *drm_mode_displayid_detailed(struct drm_device *d
 	struct drm_display_mode *mode;
 	unsigned pixel_clock = (timings->pixel_clock[0] |
 				(timings->pixel_clock[1] << 8) |
-				(timings->pixel_clock[2] << 16)) + 1;
+				(timings->pixel_clock[2] << 16));
 	unsigned hactive = (timings->hactive[0] | timings->hactive[1] << 8) + 1;
 	unsigned hblank = (timings->hblank[0] | timings->hblank[1] << 8) + 1;
 	unsigned hsync = (timings->hsync[0] | (timings->hsync[1] & 0x7f) << 8) + 1;
@@ -4919,7 +4635,6 @@ int drm_add_edid_modes(struct drm_connector *connector, struct edid *edid)
 	num_modes += add_cea_modes(connector, edid);
 	num_modes += add_alternate_cea_modes(connector, edid);
 	num_modes += add_displayid_detailed_modes(connector, edid);
-	num_modes += add_YCbCr420VDB_modes(connector, edid);
 	if (edid->features & DRM_EDID_FEATURE_DEFAULT_GTF)
 		num_modes += add_inferred_modes(connector, edid);
 

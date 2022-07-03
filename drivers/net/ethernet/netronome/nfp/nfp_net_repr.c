@@ -84,13 +84,16 @@ nfp_repr_phy_port_get_stats64(struct nfp_port *port,
 {
 	u8 __iomem *mem = port->eth_stats;
 
-	stats->tx_packets = readq(mem + NFP_MAC_STATS_TX_FRAMES_TRANSMITTED_OK);
-	stats->tx_bytes = readq(mem + NFP_MAC_STATS_TX_OUT_OCTETS);
-	stats->tx_dropped = readq(mem + NFP_MAC_STATS_TX_OUT_ERRORS);
+	/* TX and RX stats are flipped as we are returning the stats as seen
+	 * at the switch port corresponding to the phys port.
+	 */
+	stats->tx_packets = readq(mem + NFP_MAC_STATS_RX_FRAMES_RECEIVED_OK);
+	stats->tx_bytes = readq(mem + NFP_MAC_STATS_RX_IN_OCTETS);
+	stats->tx_dropped = readq(mem + NFP_MAC_STATS_RX_IN_ERRORS);
 
-	stats->rx_packets = readq(mem + NFP_MAC_STATS_RX_FRAMES_RECEIVED_OK);
-	stats->rx_bytes = readq(mem + NFP_MAC_STATS_RX_IN_OCTETS);
-	stats->rx_dropped = readq(mem + NFP_MAC_STATS_RX_IN_ERRORS);
+	stats->rx_packets = readq(mem + NFP_MAC_STATS_TX_FRAMES_TRANSMITTED_OK);
+	stats->rx_bytes = readq(mem + NFP_MAC_STATS_TX_OUT_OCTETS);
+	stats->rx_dropped = readq(mem + NFP_MAC_STATS_TX_OUT_ERRORS);
 }
 
 static void
@@ -200,7 +203,7 @@ static netdev_tx_t nfp_repr_xmit(struct sk_buff *skb, struct net_device *netdev)
 	ret = dev_queue_xmit(skb);
 	nfp_repr_inc_tx_stats(netdev, len, ret);
 
-	return NETDEV_TX_OK;
+	return ret;
 }
 
 static int nfp_repr_stop(struct net_device *netdev)

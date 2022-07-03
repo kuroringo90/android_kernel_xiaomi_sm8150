@@ -66,6 +66,7 @@
 
 struct rsnd_ssi {
 	struct rsnd_mod mod;
+	struct rsnd_mod *dma;
 
 	u32 flags;
 	u32 cr_own;
@@ -197,15 +198,10 @@ static u32 rsnd_ssi_run_mods(struct rsnd_dai_stream *io)
 {
 	struct rsnd_mod *ssi_mod = rsnd_io_to_mod_ssi(io);
 	struct rsnd_mod *ssi_parent_mod = rsnd_io_to_mod_ssip(io);
-	u32 mods;
 
-	mods = rsnd_ssi_multi_slaves_runtime(io) |
-		1 << rsnd_mod_id(ssi_mod);
-
-	if (ssi_parent_mod)
-		mods |= 1 << rsnd_mod_id(ssi_parent_mod);
-
-	return mods;
+	return rsnd_ssi_multi_slaves_runtime(io) |
+		1 << rsnd_mod_id(ssi_mod) |
+		1 << rsnd_mod_id(ssi_parent_mod);
 }
 
 u32 rsnd_ssi_multi_slaves_runtime(struct rsnd_dai_stream *io)
@@ -279,7 +275,7 @@ static int rsnd_ssi_master_clk_start(struct rsnd_mod *mod,
 	if (rsnd_ssi_is_multi_slave(mod, io))
 		return 0;
 
-	if (ssi->usrcnt > 0) {
+	if (ssi->usrcnt > 1) {
 		if (ssi->rate != rate) {
 			dev_err(dev, "SSI parent/child should use same rate\n");
 			return -EINVAL;
@@ -448,29 +444,25 @@ static bool rsnd_ssi_pointer_update(struct rsnd_mod *mod,
 				    int byte)
 {
 	struct rsnd_ssi *ssi = rsnd_mod_to_ssi(mod);
-	bool ret = false;
-	int byte_pos;
 
-	byte_pos = ssi->byte_pos + byte;
+	ssi->byte_pos += byte;
 
-	if (byte_pos >= ssi->next_period_byte) {
+	if (ssi->byte_pos >= ssi->next_period_byte) {
 		struct snd_pcm_runtime *runtime = rsnd_io_to_runtime(io);
 
 		ssi->period_pos++;
 		ssi->next_period_byte += ssi->byte_per_period;
 
 		if (ssi->period_pos >= runtime->periods) {
-			byte_pos = 0;
+			ssi->byte_pos = 0;
 			ssi->period_pos = 0;
 			ssi->next_period_byte = ssi->byte_per_period;
 		}
 
-		ret = true;
+		return true;
 	}
 
-	WRITE_ONCE(ssi->byte_pos, byte_pos);
-
-	return ret;
+	return false;
 }
 
 /*
@@ -481,6 +473,7 @@ static int rsnd_ssi_init(struct rsnd_mod *mod,
 			 struct rsnd_priv *priv)
 {
 	struct rsnd_ssi *ssi = rsnd_mod_to_ssi(mod);
+	int ret;
 
 	if (!rsnd_ssi_is_run_mods(mod, io))
 		return 0;
@@ -490,6 +483,10 @@ static int rsnd_ssi_init(struct rsnd_mod *mod,
 	ssi->usrcnt++;
 
 	rsnd_mod_power_on(mod);
+
+	ret = rsnd_ssi_master_clk_start(mod, io);
+	if (ret < 0)
+		return ret;
 
 	rsnd_ssi_config_init(mod, io);
 
@@ -836,16 +833,9 @@ static int rsnd_ssi_pointer(struct rsnd_mod *mod,
 	struct rsnd_ssi *ssi = rsnd_mod_to_ssi(mod);
 	struct snd_pcm_runtime *runtime = rsnd_io_to_runtime(io);
 
-	*pointer = bytes_to_frames(runtime, READ_ONCE(ssi->byte_pos));
+	*pointer = bytes_to_frames(runtime, ssi->byte_pos);
 
 	return 0;
-}
-
-static int rsnd_ssi_prepare(struct rsnd_mod *mod,
-			    struct rsnd_dai_stream *io,
-			    struct rsnd_priv *priv)
-{
-	return rsnd_ssi_master_clk_start(mod, io);
 }
 
 static struct rsnd_mod_ops rsnd_ssi_pio_ops = {
@@ -860,13 +850,13 @@ static struct rsnd_mod_ops rsnd_ssi_pio_ops = {
 	.pointer= rsnd_ssi_pointer,
 	.pcm_new = rsnd_ssi_pcm_new,
 	.hw_params = rsnd_ssi_hw_params,
-	.prepare = rsnd_ssi_prepare,
 };
 
 static int rsnd_ssi_dma_probe(struct rsnd_mod *mod,
 			      struct rsnd_dai_stream *io,
 			      struct rsnd_priv *priv)
 {
+	struct rsnd_ssi *ssi = rsnd_mod_to_ssi(mod);
 	int ret;
 
 	/*
@@ -881,7 +871,7 @@ static int rsnd_ssi_dma_probe(struct rsnd_mod *mod,
 		return ret;
 
 	/* SSI probe might be called many times in MUX multi path */
-	ret = rsnd_dma_attach(io, mod, &io->dma);
+	ret = rsnd_dma_attach(io, mod, &ssi->dma);
 
 	return ret;
 }
@@ -936,7 +926,6 @@ static struct rsnd_mod_ops rsnd_ssi_dma_ops = {
 	.pcm_new = rsnd_ssi_pcm_new,
 	.fallback = rsnd_ssi_fallback,
 	.hw_params = rsnd_ssi_hw_params,
-	.prepare = rsnd_ssi_prepare,
 };
 
 int rsnd_ssi_is_dma_mode(struct rsnd_mod *mod)

@@ -481,7 +481,6 @@ static void mtk_register_power_domains(struct platform_device *pdev,
 	for (i = 0; i < num; i++) {
 		struct scp_domain *scpd = &scp->domains[i];
 		struct generic_pm_domain *genpd = &scpd->genpd;
-		bool on;
 
 		/*
 		 * Initially turn on all domains to make the domains usable
@@ -489,9 +488,9 @@ static void mtk_register_power_domains(struct platform_device *pdev,
 		 * software.  The unused domains will be switched off during
 		 * late_init time.
 		 */
-		on = !WARN_ON(genpd->power_on(genpd) < 0);
+		genpd->power_on(genpd);
 
-		pm_genpd_init(genpd, NULL, !on);
+		pm_genpd_init(genpd, NULL, false);
 	}
 
 	/*
@@ -893,7 +892,7 @@ static int scpsys_probe(struct platform_device *pdev)
 
 	pd_data = &scp->pd_data;
 
-	for (i = 0, sd = soc->subdomains; i < soc->num_subdomains; i++, sd++) {
+	for (i = 0, sd = soc->subdomains ; i < soc->num_subdomains ; i++) {
 		ret = pm_genpd_add_subdomain(pd_data->domains[sd->origin],
 					     pd_data->domains[sd->subdomain]);
 		if (ret && IS_ENABLED(CONFIG_PM))

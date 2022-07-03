@@ -278,8 +278,7 @@
 #define KEY_PAUSECD		201
 #define KEY_PROG3		202
 #define KEY_PROG4		203
-#define KEY_ALL_APPLICATIONS	204	/* AC Desktop Show All Applications */
-#define KEY_DASHBOARD		KEY_ALL_APPLICATIONS
+#define KEY_DASHBOARD		204	/* AL Dashboard */
 #define KEY_SUSPEND		205
 #define KEY_CLOSE		206	/* AC Close */
 #define KEY_PLAY		207
@@ -688,14 +687,6 @@
 #define BTN_TRIGGER_HAPPY39		0x2e6
 #define BTN_TRIGGER_HAPPY40		0x2e7
 
-/* Custom fingerprint gestures keys */
-#define KEY_FP_GESTURE_UP		0x2e8
-#define KEY_FP_GESTURE_DOWN		0x2e9
-#define KEY_FP_GESTURE_LEFT		0x2ea
-#define KEY_FP_GESTURE_RIGHT		0x2eb
-#define KEY_FP_GESTURE_LONG_PRESS	0x2ec
-#define KEY_FP_GESTURE_TAP		0x2ed
-
 /* We avoid low common keys in module aliases so they don't get huge. */
 #define KEY_MIN_INTERESTING	KEY_MUTE
 #define KEY_MAX			0x2ff
@@ -751,15 +742,6 @@
 
 #define ABS_MISC		0x28
 
-/*
- * 0x2e is reserved and should not be used in input drivers.
- * It was used by HID as ABS_MISC+6 and userspace needs to detect if
- * the next ABS_* event is correct or is just ABS_MISC + n.
- * We define here ABS_RESERVED so userspace can rely on it and detect
- * the situation described above.
- */
-#define ABS_RESERVED		0x2e
-
 #define ABS_MT_SLOT		0x2f	/* MT slot being modified */
 #define ABS_MT_TOUCH_MAJOR	0x30	/* Major axis of touching ellipse */
 #define ABS_MT_TOUCH_MINOR	0x31	/* Minor axis (omit if circular) */
@@ -802,12 +784,7 @@
 #define SW_LINEIN_INSERT	0x0d  /* set = inserted */
 #define SW_MUTE_DEVICE		0x0e  /* set = device disabled */
 #define SW_PEN_INSERTED		0x0f  /* set = pen inserted */
-#define SW_HPHL_OVERCURRENT	0x10  /* set = over current on left hph */
-#define SW_HPHR_OVERCURRENT	0x11  /* set = over current on right hph */
-#define SW_MICROPHONE2_INSERT	0x12  /* set = inserted */
-#define SW_UNSUPPORT_INSERT	0x13  /* set = unsupported device inserted */
-#define SW_MACHINE_COVER	0x14  /* set = cover closed */
-#define SW_MAX			0x20
+#define SW_MAX			0x0f
 #define SW_CNT			(SW_MAX+1)
 
 /*

@@ -114,45 +114,25 @@ enum tick_dep_bits {
 #ifdef CONFIG_NO_HZ_COMMON
 extern bool tick_nohz_enabled;
 extern int tick_nohz_tick_stopped(void);
-extern void tick_nohz_idle_stop_tick(void);
-extern void tick_nohz_idle_retain_tick(void);
-extern void tick_nohz_idle_restart_tick(void);
 extern void tick_nohz_idle_enter(void);
 extern void tick_nohz_idle_exit(void);
 extern void tick_nohz_irq_exit(void);
-extern bool tick_nohz_idle_got_tick(void);
-extern ktime_t tick_nohz_get_sleep_length(ktime_t *delta_next);
+extern ktime_t tick_nohz_get_sleep_length(void);
 extern unsigned long tick_nohz_get_idle_calls(void);
-extern unsigned long tick_nohz_get_idle_calls_cpu(int cpu);
 extern u64 get_cpu_idle_time_us(int cpu, u64 *last_update_time);
 extern u64 get_cpu_iowait_time_us(int cpu, u64 *last_update_time);
-
-static inline void tick_nohz_idle_stop_tick_protected(void)
-{
-	local_irq_disable();
-	tick_nohz_idle_stop_tick();
-	local_irq_enable();
-}
-
 #else /* !CONFIG_NO_HZ_COMMON */
 #define tick_nohz_enabled (0)
 static inline int tick_nohz_tick_stopped(void) { return 0; }
-static inline void tick_nohz_idle_stop_tick(void) { }
-static inline void tick_nohz_idle_retain_tick(void) { }
-static inline void tick_nohz_idle_restart_tick(void) { }
 static inline void tick_nohz_idle_enter(void) { }
 static inline void tick_nohz_idle_exit(void) { }
-static inline bool tick_nohz_idle_got_tick(void) { return false; }
 
-static inline ktime_t tick_nohz_get_sleep_length(ktime_t *delta_next)
+static inline ktime_t tick_nohz_get_sleep_length(void)
 {
-	*delta_next = TICK_NSEC;
-	return *delta_next;
+	return NSEC_PER_SEC / HZ;
 }
 static inline u64 get_cpu_idle_time_us(int cpu, u64 *unused) { return -1; }
 static inline u64 get_cpu_iowait_time_us(int cpu, u64 *unused) { return -1; }
-
-static inline void tick_nohz_idle_stop_tick_protected(void) { }
 #endif /* !CONFIG_NO_HZ_COMMON */
 
 #ifdef CONFIG_NO_HZ_FULL
@@ -258,15 +238,7 @@ extern void __tick_nohz_task_switch(void);
 #else
 static inline int housekeeping_any_cpu(void)
 {
-	cpumask_t available;
-	int cpu;
-
-	cpumask_andnot(&available, cpu_online_mask, cpu_isolated_mask);
-	cpu = cpumask_any(&available);
-	if (cpu >= nr_cpu_ids)
-		cpu = smp_processor_id();
-
-	return cpu;
+	return smp_processor_id();
 }
 static inline bool tick_nohz_full_enabled(void) { return false; }
 static inline bool tick_nohz_full_cpu(int cpu) { return false; }
@@ -304,7 +276,7 @@ static inline bool is_housekeeping_cpu(int cpu)
 	if (tick_nohz_full_enabled())
 		return cpumask_test_cpu(cpu, housekeeping_mask);
 #endif
-	return !cpu_isolated(cpu);
+	return true;
 }
 
 static inline void housekeeping_affine(struct task_struct *t)
@@ -322,5 +294,4 @@ static inline void tick_nohz_task_switch(void)
 		__tick_nohz_task_switch();
 }
 
-ktime_t *get_next_event_cpu(unsigned int cpu);
 #endif

@@ -9,6 +9,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/kmemcheck.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <net/inet_hashtables.h>
@@ -166,6 +167,8 @@ struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 	if (tw) {
 		const struct inet_sock *inet = inet_sk(sk);
 
+		kmemcheck_annotate_bitfield(tw, flags);
+
 		tw->tw_dr	    = dr;
 		/* Give us an identity. */
 		tw->tw_daddr	    = inet->inet_daddr;
@@ -179,7 +182,6 @@ struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 		tw->tw_dport	    = inet->inet_dport;
 		tw->tw_family	    = sk->sk_family;
 		tw->tw_reuse	    = sk->sk_reuse;
-		tw->tw_reuseport    = sk->sk_reuseport;
 		tw->tw_hash	    = sk->sk_hash;
 		tw->tw_ipv6only	    = 0;
 		tw->tw_transparent  = inet->transparent;

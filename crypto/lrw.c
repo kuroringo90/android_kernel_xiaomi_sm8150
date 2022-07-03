@@ -139,12 +139,7 @@ static inline int get_index128(be128 *block)
 		return x + ffz(val);
 	}
 
-	/*
-	 * If we get here, then x == 128 and we are incrementing the counter
-	 * from all ones to all zeros. This means we must return index 127, i.e.
-	 * the one corresponding to key2*{ 1,...,1 }.
-	 */
-	return 127;
+	return x;
 }
 
 static int post_crypt(struct skcipher_request *req)
@@ -318,7 +313,7 @@ static void exit_crypt(struct skcipher_request *req)
 	rctx->left = 0;
 
 	if (rctx->ext)
-		kzfree(rctx->ext);
+		kfree(rctx->ext);
 }
 
 static int do_encrypt(struct skcipher_request *req, int err)
@@ -531,7 +526,7 @@ static void exit_tfm(struct crypto_skcipher *tfm)
 	crypto_free_skcipher(ctx->child);
 }
 
-static void free_inst(struct skcipher_instance *inst)
+static void free(struct skcipher_instance *inst)
 {
 	crypto_drop_skcipher(skcipher_instance_ctx(inst));
 	kfree(inst);
@@ -615,10 +610,8 @@ static int create(struct crypto_template *tmpl, struct rtattr **tb)
 		ecb_name[len - 1] = 0;
 
 		if (snprintf(inst->alg.base.cra_name, CRYPTO_MAX_ALG_NAME,
-			     "lrw(%s)", ecb_name) >= CRYPTO_MAX_ALG_NAME) {
-			err = -ENAMETOOLONG;
-			goto err_drop_spawn;
-		}
+			     "lrw(%s)", ecb_name) >= CRYPTO_MAX_ALG_NAME)
+			return -ENAMETOOLONG;
 	}
 
 	inst->alg.base.cra_flags = alg->base.cra_flags & CRYPTO_ALG_ASYNC;
@@ -642,7 +635,7 @@ static int create(struct crypto_template *tmpl, struct rtattr **tb)
 	inst->alg.encrypt = encrypt;
 	inst->alg.decrypt = decrypt;
 
-	inst->free = free_inst;
+	inst->free = free;
 
 	err = skcipher_register_instance(tmpl, inst);
 	if (err)

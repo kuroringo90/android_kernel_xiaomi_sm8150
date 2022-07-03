@@ -29,10 +29,10 @@ struct ovl_lookup_data {
 static int ovl_check_redirect(struct dentry *dentry, struct ovl_lookup_data *d,
 			      size_t prelen, const char *post)
 {
-	ssize_t res;
+	int res;
 	char *s, *next, *buf = NULL;
 
-	res = ovl_vfs_getxattr(dentry, OVL_XATTR_REDIRECT, NULL, 0);
+	res = vfs_getxattr(dentry, OVL_XATTR_REDIRECT, NULL, 0);
 	if (res < 0) {
 		if (res == -ENODATA || res == -EOPNOTSUPP)
 			return 0;
@@ -45,7 +45,7 @@ static int ovl_check_redirect(struct dentry *dentry, struct ovl_lookup_data *d,
 	if (res == 0)
 		goto invalid;
 
-	res = ovl_vfs_getxattr(dentry, OVL_XATTR_REDIRECT, buf, res);
+	res = vfs_getxattr(dentry, OVL_XATTR_REDIRECT, buf, res);
 	if (res < 0)
 		goto fail;
 	if (res == 0)
@@ -56,15 +56,6 @@ static int ovl_check_redirect(struct dentry *dentry, struct ovl_lookup_data *d,
 			if (s == next)
 				goto invalid;
 		}
-		/*
-		 * One of the ancestor path elements in an absolute path
-		 * lookup in ovl_lookup_layer() could have been opaque and
-		 * that will stop further lookup in lower layers (d->stop=true)
-		 * But we have found an absolute redirect in decendant path
-		 * element and that should force continue lookup in lower
-		 * layers (reset d->stop).
-		 */
-		d->stop = false;
 	} else {
 		if (strchr(buf, '/') != NULL)
 			goto invalid;
@@ -85,7 +76,7 @@ err_free:
 	kfree(buf);
 	return 0;
 fail:
-	pr_warn_ratelimited("overlayfs: failed to get redirect (%zi)\n", res);
+	pr_warn_ratelimited("overlayfs: failed to get redirect (%i)\n", res);
 	goto err_free;
 invalid:
 	pr_warn_ratelimited("overlayfs: invalid redirect (%s)\n", buf);
@@ -99,10 +90,10 @@ static int ovl_acceptable(void *ctx, struct dentry *dentry)
 
 static struct ovl_fh *ovl_get_origin_fh(struct dentry *dentry)
 {
-	ssize_t res;
+	int res;
 	struct ovl_fh *fh = NULL;
 
-	res = ovl_vfs_getxattr(dentry, OVL_XATTR_ORIGIN, NULL, 0);
+	res = vfs_getxattr(dentry, OVL_XATTR_ORIGIN, NULL, 0);
 	if (res < 0) {
 		if (res == -ENODATA || res == -EOPNOTSUPP)
 			return NULL;
@@ -116,7 +107,7 @@ static struct ovl_fh *ovl_get_origin_fh(struct dentry *dentry)
 	if (!fh)
 		return ERR_PTR(-ENOMEM);
 
-	res = ovl_vfs_getxattr(dentry, OVL_XATTR_ORIGIN, fh, res);
+	res = vfs_getxattr(dentry, OVL_XATTR_ORIGIN, fh, res);
 	if (res < 0)
 		goto fail;
 
@@ -142,11 +133,10 @@ out:
 	return NULL;
 
 fail:
-	pr_warn_ratelimited("overlayfs: failed to get origin (%zi)\n", res);
+	pr_warn_ratelimited("overlayfs: failed to get origin (%i)\n", res);
 	goto out;
 invalid:
-	pr_warn_ratelimited("overlayfs: invalid origin (%*phN)\n",
-			    (int)res, fh);
+	pr_warn_ratelimited("overlayfs: invalid origin (%*phN)\n", res, fh);
 	goto out;
 }
 
@@ -369,10 +359,8 @@ int ovl_verify_origin(struct dentry *dentry, struct vfsmount *mnt,
 
 	fh = ovl_encode_fh(origin, is_upper);
 	err = PTR_ERR(fh);
-	if (IS_ERR(fh)) {
-		fh = NULL;
+	if (IS_ERR(fh))
 		goto fail;
-	}
 
 	err = ovl_verify_origin_fh(dentry, fh);
 	if (set && err == -ENODATA)
@@ -449,7 +437,7 @@ int ovl_verify_index(struct dentry *index, struct path *lowerstack,
 
 	/* Check if index is orphan and don't warn before cleaning it */
 	if (d_inode(index)->i_nlink == 1 &&
-	    ovl_get_nlink(origin.dentry, index, 0) == 0)
+	    ovl_get_nlink(index, origin.dentry, 0) == 0)
 		err = -ENOENT;
 
 	dput(origin.dentry);
@@ -522,7 +510,7 @@ static struct dentry *ovl_lookup_index(struct dentry *dentry,
 			index = NULL;
 			goto out;
 		}
-		pr_warn_ratelimited("overlayfs: failed inode index lookup (ino=%lu, key=%.*s, err=%i);\n"
+		pr_warn_ratelimited("overlayfs: failed inode index lookup (ino=%lu, key=%*s, err=%i);\n"
 				    "overlayfs: mount with '-o index=off' to disable inodes index.\n",
 				    d_inode(origin)->i_ino, name.len, name.name,
 				    err);
@@ -731,7 +719,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			ovl_set_flag(OVL_INDEX, inode);
 	}
 
-	ovl_revert_creds(old_cred);
+	revert_creds(old_cred);
 	dput(index);
 	kfree(stack);
 	kfree(d.redirect);
@@ -752,7 +740,7 @@ out_put_upper:
 	kfree(upperredirect);
 out:
 	kfree(d.redirect);
-	ovl_revert_creds(old_cred);
+	revert_creds(old_cred);
 	return ERR_PTR(err);
 }
 

@@ -259,9 +259,8 @@ struct perf_evsel *perf_evsel__new_idx(struct perf_event_attr *attr, int idx)
 {
 	struct perf_evsel *evsel = zalloc(perf_evsel__object.size);
 
-	if (!evsel)
-		return NULL;
-	perf_evsel__init(evsel, attr, idx);
+	if (evsel != NULL)
+		perf_evsel__init(evsel, attr, idx);
 
 	if (perf_evsel__is_bpf_output(evsel)) {
 		evsel->attr.sample_type |= (PERF_SAMPLE_RAW | PERF_SAMPLE_TIME |
@@ -587,9 +586,6 @@ const char *perf_evsel__name(struct perf_evsel *evsel)
 {
 	char bf[128];
 
-	if (!evsel)
-		goto out_unknown;
-
 	if (evsel->name)
 		return evsel->name;
 
@@ -626,10 +622,7 @@ const char *perf_evsel__name(struct perf_evsel *evsel)
 
 	evsel->name = strdup(bf);
 
-	if (evsel->name)
-		return evsel->name;
-out_unknown:
-	return "unknown";
+	return evsel->name ?: "unknown";
 }
 
 const char *perf_evsel__group_name(struct perf_evsel *evsel)
@@ -729,29 +722,23 @@ static void apply_config_terms(struct perf_evsel *evsel,
 	struct perf_evsel_config_term *term;
 	struct list_head *config_terms = &evsel->config_terms;
 	struct perf_event_attr *attr = &evsel->attr;
-	/* callgraph default */
-	struct callchain_param param = {
-		.record_mode = callchain_param.record_mode,
-	};
+	struct callchain_param param;
 	u32 dump_size = 0;
 	int max_stack = 0;
 	const char *callgraph_buf = NULL;
 
+	/* callgraph default */
+	param.record_mode = callchain_param.record_mode;
+
 	list_for_each_entry(term, config_terms, list) {
 		switch (term->type) {
 		case PERF_EVSEL__CONFIG_TERM_PERIOD:
-			if (!(term->weak && opts->user_interval != ULLONG_MAX)) {
-				attr->sample_period = term->val.period;
-				attr->freq = 0;
-				perf_evsel__reset_sample_bit(evsel, PERIOD);
-			}
+			attr->sample_period = term->val.period;
+			attr->freq = 0;
 			break;
 		case PERF_EVSEL__CONFIG_TERM_FREQ:
-			if (!(term->weak && opts->user_freq != UINT_MAX)) {
-				attr->sample_freq = term->val.freq;
-				attr->freq = 1;
-				perf_evsel__set_sample_bit(evsel, PERIOD);
-			}
+			attr->sample_freq = term->val.freq;
+			attr->freq = 1;
 			break;
 		case PERF_EVSEL__CONFIG_TERM_TIME:
 			if (term->val.time)
@@ -829,12 +816,6 @@ static void apply_config_terms(struct perf_evsel *evsel,
 		if (param.enabled)
 			perf_evsel__config_callchain(evsel, opts, &param);
 	}
-}
-
-static bool is_dummy_event(struct perf_evsel *evsel)
-{
-	return (evsel->attr.type == PERF_TYPE_SOFTWARE) &&
-	       (evsel->attr.config == PERF_COUNT_SW_DUMMY);
 }
 
 /*
@@ -958,6 +939,9 @@ void perf_evsel__config(struct perf_evsel *evsel, struct record_opts *opts,
 	if (target__has_cpu(&opts->target) || opts->sample_cpu)
 		perf_evsel__set_sample_bit(evsel, CPU);
 
+	if (opts->period)
+		perf_evsel__set_sample_bit(evsel, PERIOD);
+
 	/*
 	 * When the user explicitly disabled time don't force it here.
 	 */
@@ -1059,22 +1043,6 @@ void perf_evsel__config(struct perf_evsel *evsel, struct record_opts *opts,
 	apply_config_terms(evsel, opts);
 
 	evsel->ignore_missing_thread = opts->ignore_missing_thread;
-
-	/* The --period option takes the precedence. */
-	if (opts->period_set) {
-		if (opts->period)
-			perf_evsel__set_sample_bit(evsel, PERIOD);
-		else
-			perf_evsel__reset_sample_bit(evsel, PERIOD);
-	}
-
-	/*
-	 * For initial_delay, a dummy event is added implicitly.
-	 * The software event will trigger -EOPNOTSUPP error out,
-	 * if BRANCH_STACK bit is set.
-	 */
-	if (opts->initial_delay && is_dummy_event(evsel))
-		perf_evsel__reset_sample_bit(evsel, BRANCH_STACK);
 }
 
 static int perf_evsel__alloc_fd(struct perf_evsel *evsel, int ncpus, int nthreads)
@@ -1235,7 +1203,6 @@ void perf_evsel__exit(struct perf_evsel *evsel)
 {
 	assert(list_empty(&evsel->node));
 	assert(evsel->evlist == NULL);
-	perf_evsel__free_counts(evsel);
 	perf_evsel__free_fd(evsel);
 	perf_evsel__free_id(evsel);
 	perf_evsel__free_config_terms(evsel);
@@ -1620,46 +1587,10 @@ static int __open_attr__fprintf(FILE *fp, const char *name, const char *val,
 	return fprintf(fp, "  %-32s %s\n", name, val);
 }
 
-static void perf_evsel__remove_fd(struct perf_evsel *pos,
-				  int nr_cpus, int nr_threads,
-				  int thread_idx)
-{
-	for (int cpu = 0; cpu < nr_cpus; cpu++)
-		for (int thread = thread_idx; thread < nr_threads - 1; thread++)
-			FD(pos, cpu, thread) = FD(pos, cpu, thread + 1);
-}
-
-static int update_fds(struct perf_evsel *evsel,
-		      int nr_cpus, int cpu_idx,
-		      int nr_threads, int thread_idx)
-{
-	struct perf_evsel *pos;
-
-	if (cpu_idx >= nr_cpus || thread_idx >= nr_threads)
-		return -EINVAL;
-
-	evlist__for_each_entry(evsel->evlist, pos) {
-		nr_cpus = pos != evsel ? nr_cpus : cpu_idx;
-
-		perf_evsel__remove_fd(pos, nr_cpus, nr_threads, thread_idx);
-
-		/*
-		 * Since fds for next evsel has not been created,
-		 * there is no need to iterate whole event list.
-		 */
-		if (pos == evsel)
-			break;
-	}
-	return 0;
-}
-
 static bool ignore_missing_thread(struct perf_evsel *evsel,
-				  int nr_cpus, int cpu,
 				  struct thread_map *threads,
 				  int thread, int err)
 {
-	pid_t ignore_pid = thread_map__pid(threads, thread);
-
 	if (!evsel->ignore_missing_thread)
 		return false;
 
@@ -1675,18 +1606,11 @@ static bool ignore_missing_thread(struct perf_evsel *evsel,
 	if (threads->nr == 1)
 		return false;
 
-	/*
-	 * We should remove fd for missing_thread first
-	 * because thread_map__remove() will decrease threads->nr.
-	 */
-	if (update_fds(evsel, nr_cpus, cpu, threads->nr, thread))
-		return false;
-
 	if (thread_map__remove(threads, thread))
 		return false;
 
 	pr_warning("WARNING: Ignored open failure for pid %d\n",
-		   ignore_pid);
+		   thread_map__pid(threads, thread));
 	return true;
 }
 
@@ -1791,7 +1715,7 @@ retry_open:
 			if (fd < 0) {
 				err = -errno;
 
-				if (ignore_missing_thread(evsel, cpus->nr, cpu, threads, thread, err)) {
+				if (ignore_missing_thread(evsel, threads, thread, err)) {
 					/*
 					 * We just removed 1 thread, so take a step
 					 * back on thread index and lower the upper

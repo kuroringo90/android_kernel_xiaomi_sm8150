@@ -380,8 +380,8 @@ static void lpuart_dma_tx(struct lpuart_port *sport)
 	}
 
 	sport->dma_tx_desc = dmaengine_prep_slave_sg(sport->dma_tx_chan, sgl,
-					ret, DMA_MEM_TO_DEV,
-					DMA_PREP_INTERRUPT);
+					sport->dma_tx_nents,
+					DMA_MEM_TO_DEV, DMA_PREP_INTERRUPT);
 	if (!sport->dma_tx_desc) {
 		dma_unmap_sg(dev, sgl, sport->dma_tx_nents, DMA_TO_DEVICE);
 		dev_err(dev, "Cannot prepare TX slave DMA!\n");
@@ -532,26 +532,26 @@ static int lpuart32_poll_init(struct uart_port *port)
 	spin_lock_irqsave(&sport->port.lock, flags);
 
 	/* Disable Rx & Tx */
-	lpuart32_write(&sport->port, UARTCTRL, 0);
+	writel(0, sport->port.membase + UARTCTRL);
 
-	temp = lpuart32_read(&sport->port, UARTFIFO);
+	temp = readl(sport->port.membase + UARTFIFO);
 
 	/* Enable Rx and Tx FIFO */
-	lpuart32_write(&sport->port, UARTFIFO,
-		       temp | UARTFIFO_RXFE | UARTFIFO_TXFE);
+	writel(temp | UARTFIFO_RXFE | UARTFIFO_TXFE,
+		   sport->port.membase + UARTFIFO);
 
 	/* flush Tx and Rx FIFO */
-	lpuart32_write(&sport->port, UARTFIFO,
-		       UARTFIFO_TXFLUSH | UARTFIFO_RXFLUSH);
+	writel(UARTFIFO_TXFLUSH | UARTFIFO_RXFLUSH,
+			sport->port.membase + UARTFIFO);
 
 	/* explicitly clear RDRF */
-	if (lpuart32_read(&sport->port, UARTSTAT) & UARTSTAT_RDRF) {
-		lpuart32_read(&sport->port, UARTDATA);
-		lpuart32_write(&sport->port, UARTFIFO, UARTFIFO_RXUF);
+	if (readl(sport->port.membase + UARTSTAT) & UARTSTAT_RDRF) {
+		readl(sport->port.membase + UARTDATA);
+		writel(UARTFIFO_RXUF, sport->port.membase + UARTFIFO);
 	}
 
 	/* Enable Rx and Tx */
-	lpuart32_write(&sport->port, UARTCTRL, UARTCTRL_RE | UARTCTRL_TE);
+	writel(UARTCTRL_RE | UARTCTRL_TE, sport->port.membase + UARTCTRL);
 	spin_unlock_irqrestore(&sport->port.lock, flags);
 
 	return 0;
@@ -559,18 +559,18 @@ static int lpuart32_poll_init(struct uart_port *port)
 
 static void lpuart32_poll_put_char(struct uart_port *port, unsigned char c)
 {
-	while (!(lpuart32_read(port, UARTSTAT) & UARTSTAT_TDRE))
+	while (!(readl(port->membase + UARTSTAT) & UARTSTAT_TDRE))
 		barrier();
 
-	lpuart32_write(port, UARTDATA, c);
+	writel(c, port->membase + UARTDATA);
 }
 
 static int lpuart32_poll_get_char(struct uart_port *port)
 {
-	if (!(lpuart32_read(port, UARTWATER) >> UARTWATER_RXCNT_OFF))
+	if (!(readl(port->membase + UARTSTAT) & UARTSTAT_RDRF))
 		return NO_POLL_CHAR;
 
-	return lpuart32_read(port, UARTDATA);
+	return readl(port->membase + UARTDATA);
 }
 #endif
 
@@ -983,8 +983,7 @@ static inline int lpuart_start_rx_dma(struct lpuart_port *sport)
 	struct circ_buf *ring = &sport->rx_ring;
 	int ret, nent;
 	int bits, baud;
-	struct tty_port *port = &sport->port.state->port;
-	struct tty_struct *tty = port->tty;
+	struct tty_struct *tty = tty_port_tty_get(&sport->port.state->port);
 	struct ktermios *termios = &tty->termios;
 
 	baud = tty_get_baud_rate(tty);
@@ -1482,8 +1481,6 @@ lpuart_set_termios(struct uart_port *port, struct ktermios *termios,
 			else
 				cr1 &= ~UARTCR1_PT;
 		}
-	} else {
-		cr1 &= ~UARTCR1_PE;
 	}
 
 	/* ask the core to calculate the divisor */
@@ -1696,12 +1693,10 @@ lpuart32_set_termios(struct uart_port *port, struct ktermios *termios,
 			else
 				ctrl &= ~UARTCTRL_PT;
 		}
-	} else {
-		ctrl &= ~UARTCTRL_PE;
 	}
 
 	/* ask the core to calculate the divisor */
-	baud = uart_get_baud_rate(port, termios, old, 50, port->uartclk / 4);
+	baud = uart_get_baud_rate(port, termios, old, 50, port->uartclk / 16);
 
 	spin_lock_irqsave(&sport->port.lock, flags);
 
@@ -1998,9 +1993,6 @@ lpuart32_console_get_options(struct lpuart_port *sport, int *baud,
 
 	bd = lpuart32_read(&sport->port, UARTBAUD);
 	bd &= UARTBAUD_SBR_MASK;
-	if (!bd)
-		return;
-
 	sbr = bd;
 	uartclk = clk_get_rate(sport->clk);
 	/*
@@ -2159,10 +2151,6 @@ static int lpuart_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to get alias id, errno %d\n", ret);
 		return ret;
 	}
-	if (ret >= ARRAY_SIZE(lpuart_ports)) {
-		dev_err(&pdev->dev, "serial%d out of range\n", ret);
-		return -EINVAL;
-	}
 	sport->port.line = ret;
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	sport->port.membase = devm_ioremap_resource(&pdev->dev, res);
@@ -2170,7 +2158,7 @@ static int lpuart_probe(struct platform_device *pdev)
 		return PTR_ERR(sport->port.membase);
 
 	sport->port.membase += sdata->reg_off;
-	sport->port.mapbase = res->start + sdata->reg_off;
+	sport->port.mapbase = res->start;
 	sport->port.dev = &pdev->dev;
 	sport->port.type = PORT_LPUART;
 	ret = platform_get_irq(pdev, 0);

@@ -136,8 +136,7 @@ void amdgpu_ring_commit(struct amdgpu_ring *ring)
 	if (ring->funcs->end_use)
 		ring->funcs->end_use(ring);
 
-	if (ring->funcs->type != AMDGPU_RING_TYPE_KIQ)
-		amdgpu_ring_lru_touch(ring->adev, ring);
+	amdgpu_ring_lru_touch(ring->adev, ring);
 }
 
 /**

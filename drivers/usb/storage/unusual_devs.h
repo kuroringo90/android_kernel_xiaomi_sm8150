@@ -426,16 +426,6 @@ UNUSUAL_DEV(  0x04b8, 0x0602, 0x0110, 0x0110,
 		USB_SC_SCSI, USB_PR_BULK, NULL, US_FL_SINGLE_LUN),
 
 /*
- * Reported by James Buren <braewoods+lkml@braewoods.net>
- * Virtual ISOs cannot be remounted if ejected while the device is locked
- * Disable locking to mimic Windows behavior that bypasses the issue
- */
-UNUSUAL_DEV(  0x04c5, 0x2028, 0x0001, 0x0001,
-		"iODD",
-		"2531/2541",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL, US_FL_NOT_LOCKABLE),
-
-/*
  * Not sure who reported this originally but
  * Pavel Machek <pavel@ucw.cz> reported that the extra US_FL_SINGLE_LUN
  * flag be added */
@@ -445,16 +435,9 @@ UNUSUAL_DEV(  0x04cb, 0x0100, 0x0000, 0x2210,
 		USB_SC_UFI, USB_PR_DEVICE, NULL, US_FL_FIX_INQUIRY | US_FL_SINGLE_LUN),
 
 /*
- * Reported by Ondrej Zary <linux@zary.sk>
+ * Reported by Ondrej Zary <linux@rainbow-software.org>
  * The device reports one sector more and breaks when that sector is accessed
- * Firmwares older than 2.6c (the latest one and the only that claims Linux
- * support) have also broken tag handling
  */
-UNUSUAL_DEV(  0x04ce, 0x0002, 0x0000, 0x026b,
-		"ScanLogic",
-		"SL11R-IDE",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_FIX_CAPACITY | US_FL_BULK_IGNORE_TAG),
 UNUSUAL_DEV(  0x04ce, 0x0002, 0x026c, 0x026c,
 		"ScanLogic",
 		"SL11R-IDE",
@@ -1294,30 +1277,12 @@ UNUSUAL_DEV( 0x090a, 0x1200, 0x0000, 0x9999,
 		USB_SC_RBC, USB_PR_BULK, NULL,
 		0 ),
 
-UNUSUAL_DEV(0x090c, 0x1000, 0x1100, 0x1100,
-		"Samsung",
-		"Flash Drive FIT",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_MAX_SECTORS_64),
-
 /* aeb */
 UNUSUAL_DEV( 0x090c, 0x1132, 0x0000, 0xffff,
 		"Feiya",
 		"5-in-1 Card Reader",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_FIX_CAPACITY ),
-
-/*
- * Reported by Icenowy Zheng <icenowy@aosc.io>
- * The SMI SM3350 USB-UFS bridge controller will enter a wrong state
- * that do not process read/write command if a long sense is requested,
- * so force to use 18-byte sense.
- */
-UNUSUAL_DEV(  0x090c, 0x3350, 0x0000, 0xffff,
-		"SMI",
-		"SM3350 UFS-to-USB-Mass-Storage bridge",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_BAD_SENSE ),
 
 /*
  * Reported by Paul Hartman <paul.hartman+linux@gmail.com>
@@ -2142,18 +2107,11 @@ UNUSUAL_DEV(  0x14cd, 0x6600, 0x0201, 0x0201,
 		US_FL_IGNORE_RESIDUE ),
 
 /* Reported by Michael Büsch <m@bues.ch> */
-UNUSUAL_DEV(  0x152d, 0x0567, 0x0114, 0x0117,
+UNUSUAL_DEV(  0x152d, 0x0567, 0x0114, 0x0116,
 		"JMicron",
 		"USB to ATA/ATAPI Bridge",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_BROKEN_FUA ),
-
-/* Reported by David Kozub <zub@linux.fjfi.cvut.cz> */
-UNUSUAL_DEV(0x152d, 0x0578, 0x0000, 0x9999,
-		"JMicron",
-		"JMS567",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_BROKEN_FUA),
 
 /*
  * Reported by Alexandre Oliva <oliva@lsd.ic.unicamp.br>
@@ -2167,13 +2125,6 @@ UNUSUAL_DEV(  0x152d, 0x2329, 0x0100, 0x0100,
 
 /* Reported by Dmitry Nezhevenko <dion@dion.org.ua> */
 UNUSUAL_DEV(  0x152d, 0x2566, 0x0114, 0x0114,
-		"JMicron",
-		"USB to ATA/ATAPI Bridge",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_BROKEN_FUA ),
-
-/* Reported by Teijo Kinnunen <teijo.kinnunen@code-q.fi> */
-UNUSUAL_DEV(  0x152d, 0x2567, 0x0117, 0x0117,
 		"JMicron",
 		"USB to ATA/ATAPI Bridge",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
@@ -2248,18 +2199,6 @@ UNUSUAL_DEV( 0x1908, 0x3335, 0x0200, 0x0200,
 		US_FL_NO_READ_DISC_INFO ),
 
 /*
- * Reported by Matthias Schwarzott <zzam@gentoo.org>
- * The Amazon Kindle treats SYNCHRONIZE CACHE as an indication that
- * the host may be finished with it, and automatically ejects its
- * emulated media unless it receives another command within one second.
- */
-UNUSUAL_DEV( 0x1949, 0x0004, 0x0000, 0x9999,
-		"Amazon",
-		"Kindle",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_SENSE_AFTER_SYNC ),
-
-/*
  * Reported by Oliver Neukum <oneukum@suse.com>
  * This device morphes spontaneously into another device if the access
  * pattern of Windows isn't followed. Thus writable media would be dirty
@@ -2320,16 +2259,6 @@ UNUSUAL_DEV(  0x2027, 0xa001, 0x0000, 0x9999,
 		USB_SC_DEVICE, USB_PR_DEVICE, usb_stor_euscsi_init,
 		US_FL_SCM_MULT_TARG ),
 
-/*
- * Reported by DocMAX <mail@vacharakis.de>
- * and Thomas Weißschuh <linux@weissschuh.net>
- */
-UNUSUAL_DEV( 0x2109, 0x0715, 0x9999, 0x9999,
-		"VIA Labs, Inc.",
-		"VL817 SATA Bridge",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_IGNORE_UAS),
-
 UNUSUAL_DEV( 0x2116, 0x0320, 0x0001, 0x0001,
 		"ST",
 		"2A",
@@ -2364,13 +2293,6 @@ UNUSUAL_DEV(  0x2735, 0x100b, 0x0000, 0x9999,
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_GO_SLOW ),
 
-/* Reported-by: Tim Anderson <tsa@biglakesoftware.com> */
-UNUSUAL_DEV(  0x2ca3, 0x0031, 0x0000, 0x9999,
-		"DJI",
-		"CineSSD",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_NO_ATA_1X),
-
 /*
  * Reported by Frederic Marchal <frederic.marchal@wowcompany.com>
  * Mio Moov 330
@@ -2380,13 +2302,6 @@ UNUSUAL_DEV(  0x3340, 0xffff, 0x0000, 0x0000,
 		"Mio DigiWalker USB Sync",
 		USB_SC_DEVICE,USB_PR_DEVICE,NULL,
 		US_FL_MAX_SECTORS_64 ),
-
-/* Reported by Cyril Roelandt <tipecaml@gmail.com> */
-UNUSUAL_DEV(  0x357d, 0x7788, 0x0114, 0x0114,
-		"JMicron",
-		"USB to ATA/ATAPI Bridge",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_BROKEN_FUA | US_FL_IGNORE_UAS ),
 
 /* Reported by Andrey Rahmatullin <wrar@altlinux.org> */
 UNUSUAL_DEV(  0x4102, 0x1020, 0x0100,  0x0100,
@@ -2410,15 +2325,6 @@ UNUSUAL_DEV(  0x4146, 0xba01, 0x0100, 0x0100,
 		"Iomega",
 		"Micro Mini 1GB",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL, US_FL_NOT_LOCKABLE ),
-
-/* "G-DRIVE" external HDD hangs on write without these.
- * Patch submitted by Alexander Kappner <agk@godking.net>
- */
-UNUSUAL_DEV(0x4971, 0x8024, 0x0000, 0x9999,
-		"SimpleTech",
-		"External HDD",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_ALWAYS_SYNC),
 
 /*
  * Nick Bowler <nbowler@elliptictech.com>

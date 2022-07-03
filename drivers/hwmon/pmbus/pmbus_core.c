@@ -21,7 +21,6 @@
 
 #include <linux/debugfs.h>
 #include <linux/kernel.h>
-#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/err.h>
@@ -500,8 +499,8 @@ static long pmbus_reg2data_linear(struct pmbus_data *data,
 static long pmbus_reg2data_direct(struct pmbus_data *data,
 				  struct pmbus_sensor *sensor)
 {
-	s64 b, val = (s16)sensor->data;
-	s32 m, R;
+	long val = (s16) sensor->data;
+	long m, b, R;
 
 	m = data->info->m[sensor->class];
 	b = data->info->b[sensor->class];
@@ -529,12 +528,11 @@ static long pmbus_reg2data_direct(struct pmbus_data *data,
 		R--;
 	}
 	while (R < 0) {
-		val = div_s64(val + 5LL, 10L);  /* round closest */
+		val = DIV_ROUND_CLOSEST(val, 10);
 		R++;
 	}
 
-	val = div_s64(val - b, m);
-	return clamp_val(val, LONG_MIN, LONG_MAX);
+	return (val - b) / m;
 }
 
 /*
@@ -658,8 +656,7 @@ static u16 pmbus_data2reg_linear(struct pmbus_data *data,
 static u16 pmbus_data2reg_direct(struct pmbus_data *data,
 				 struct pmbus_sensor *sensor, long val)
 {
-	s64 b, val64 = val;
-	s32 m, R;
+	long m, b, R;
 
 	m = data->info->m[sensor->class];
 	b = data->info->b[sensor->class];
@@ -676,18 +673,18 @@ static u16 pmbus_data2reg_direct(struct pmbus_data *data,
 		R -= 3;		/* Adjust R and b for data in milli-units */
 		b *= 1000;
 	}
-	val64 = val64 * m + b;
+	val = val * m + b;
 
 	while (R > 0) {
-		val64 *= 10;
+		val *= 10;
 		R--;
 	}
 	while (R < 0) {
-		val64 = div_s64(val64 + 5LL, 10L);  /* round closest */
+		val = DIV_ROUND_CLOSEST(val, 10);
 		R++;
 	}
 
-	return (u16)clamp_val(val64, S16_MIN, S16_MAX);
+	return val;
 }
 
 static u16 pmbus_data2reg_vid(struct pmbus_data *data,
@@ -1055,8 +1052,7 @@ static int pmbus_add_sensor_attrs_one(struct i2c_client *client,
 				      const struct pmbus_driver_info *info,
 				      const char *name,
 				      int index, int page,
-				      const struct pmbus_sensor_attr *attr,
-				      bool paged)
+				      const struct pmbus_sensor_attr *attr)
 {
 	struct pmbus_sensor *base;
 	bool upper = !!(attr->gbit & 0xff00);	/* need to check STATUS_WORD */
@@ -1064,7 +1060,7 @@ static int pmbus_add_sensor_attrs_one(struct i2c_client *client,
 
 	if (attr->label) {
 		ret = pmbus_add_label(data, name, index, attr->label,
-				      paged ? page + 1 : 0);
+				      attr->paged ? page + 1 : 0);
 		if (ret)
 			return ret;
 	}
@@ -1097,30 +1093,6 @@ static int pmbus_add_sensor_attrs_one(struct i2c_client *client,
 	return 0;
 }
 
-static bool pmbus_sensor_is_paged(const struct pmbus_driver_info *info,
-				  const struct pmbus_sensor_attr *attr)
-{
-	int p;
-
-	if (attr->paged)
-		return true;
-
-	/*
-	 * Some attributes may be present on more than one page despite
-	 * not being marked with the paged attribute. If that is the case,
-	 * then treat the sensor as being paged and add the page suffix to the
-	 * attribute name.
-	 * We don't just add the paged attribute to all such attributes, in
-	 * order to maintain the un-suffixed labels in the case where the
-	 * attribute is only on page 0.
-	 */
-	for (p = 1; p < info->pages; p++) {
-		if (info->func[p] & attr->func)
-			return true;
-	}
-	return false;
-}
-
 static int pmbus_add_sensor_attrs(struct i2c_client *client,
 				  struct pmbus_data *data,
 				  const char *name,
@@ -1134,15 +1106,14 @@ static int pmbus_add_sensor_attrs(struct i2c_client *client,
 	index = 1;
 	for (i = 0; i < nattrs; i++) {
 		int page, pages;
-		bool paged = pmbus_sensor_is_paged(info, attrs);
 
-		pages = paged ? info->pages : 1;
+		pages = attrs->paged ? info->pages : 1;
 		for (page = 0; page < pages; page++) {
 			if (!(info->func[page] & attrs->func))
 				continue;
 			ret = pmbus_add_sensor_attrs_one(client, data, info,
 							 name, index, page,
-							 attrs, paged);
+							 attrs);
 			if (ret)
 				return ret;
 			index++;
@@ -1162,7 +1133,7 @@ static const struct pmbus_limit_attr vin_limit_attrs[] = {
 		.reg = PMBUS_VIN_UV_FAULT_LIMIT,
 		.attr = "lcrit",
 		.alarm = "lcrit_alarm",
-		.sbit = PB_VOLTAGE_UV_FAULT | PB_VOLTAGE_VIN_OFF,
+		.sbit = PB_VOLTAGE_UV_FAULT,
 	}, {
 		.reg = PMBUS_VIN_OV_WARN_LIMIT,
 		.attr = "max",
@@ -1828,10 +1799,7 @@ static int pmbus_init_common(struct i2c_client *client, struct pmbus_data *data,
 	if (ret >= 0 && (ret & PB_CAPABILITY_ERROR_CHECK))
 		client->flags |= I2C_CLIENT_PEC;
 
-	if (data->info->pages)
-		pmbus_clear_faults(client);
-	else
-		pmbus_clear_fault_page(client, -1);
+	pmbus_clear_faults(client);
 
 	if (info->identify) {
 		ret = (*info->identify)(client, info);
@@ -1861,14 +1829,10 @@ static int pmbus_regulator_is_enabled(struct regulator_dev *rdev)
 {
 	struct device *dev = rdev_get_dev(rdev);
 	struct i2c_client *client = to_i2c_client(dev->parent);
-	struct pmbus_data *data = i2c_get_clientdata(client);
 	u8 page = rdev_get_id(rdev);
 	int ret;
 
-	mutex_lock(&data->update_lock);
 	ret = pmbus_read_byte_data(client, page, PMBUS_OPERATION);
-	mutex_unlock(&data->update_lock);
-
 	if (ret < 0)
 		return ret;
 
@@ -1879,17 +1843,11 @@ static int _pmbus_regulator_on_off(struct regulator_dev *rdev, bool enable)
 {
 	struct device *dev = rdev_get_dev(rdev);
 	struct i2c_client *client = to_i2c_client(dev->parent);
-	struct pmbus_data *data = i2c_get_clientdata(client);
 	u8 page = rdev_get_id(rdev);
-	int ret;
 
-	mutex_lock(&data->update_lock);
-	ret = pmbus_update_byte_data(client, page, PMBUS_OPERATION,
-				     PB_OPERATION_CONTROL_ON,
-				     enable ? PB_OPERATION_CONTROL_ON : 0);
-	mutex_unlock(&data->update_lock);
-
-	return ret;
+	return pmbus_update_byte_data(client, page, PMBUS_OPERATION,
+				      PB_OPERATION_CONTROL_ON,
+				      enable ? PB_OPERATION_CONTROL_ON : 0);
 }
 
 static int pmbus_regulator_enable(struct regulator_dev *rdev)

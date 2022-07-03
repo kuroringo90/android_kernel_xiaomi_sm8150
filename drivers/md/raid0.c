@@ -26,9 +26,6 @@
 #include "raid0.h"
 #include "raid5.h"
 
-static int default_layout = 0;
-module_param(default_layout, int, 0644);
-
 #define UNSUPPORTED_MDDEV_FLAGS		\
 	((1L << MD_HAS_JOURNAL) |	\
 	 (1L << MD_JOURNAL_CLEAN) |	\
@@ -94,7 +91,7 @@ static int create_strip_zones(struct mddev *mddev, struct r0conf **private_conf)
 	char b[BDEVNAME_SIZE];
 	char b2[BDEVNAME_SIZE];
 	struct r0conf *conf = kzalloc(sizeof(*conf), GFP_KERNEL);
-	unsigned blksize = 512;
+	unsigned short blksize = 512;
 
 	*private_conf = ERR_PTR(-ENOMEM);
 	if (!conf)
@@ -149,7 +146,6 @@ static int create_strip_zones(struct mddev *mddev, struct r0conf **private_conf)
 	}
 	pr_debug("md/raid0:%s: FINAL %d zones\n",
 		 mdname(mddev), conf->nr_strip_zones);
-
 	/*
 	 * now since we have the hard sector sizes, we can make sure
 	 * chunk size is a multiple of that sector size
@@ -276,22 +272,6 @@ static int create_strip_zones(struct mddev *mddev, struct r0conf **private_conf)
 		pr_debug("md/raid0:%s: current zone start: %llu\n",
 			 mdname(mddev),
 			 (unsigned long long)smallest->sectors);
-	}
-
-	if (conf->nr_strip_zones == 1 || conf->strip_zone[1].nb_dev == 1) {
-		conf->layout = RAID0_ORIG_LAYOUT;
-	} else if (mddev->layout == RAID0_ORIG_LAYOUT ||
-		   mddev->layout == RAID0_ALT_MULTIZONE_LAYOUT) {
-		conf->layout = mddev->layout;
-	} else if (default_layout == RAID0_ORIG_LAYOUT ||
-		   default_layout == RAID0_ALT_MULTIZONE_LAYOUT) {
-		conf->layout = default_layout;
-	} else {
-		pr_err("md/raid0:%s: cannot assemble multi-zone RAID0 with default_layout setting\n",
-		       mdname(mddev));
-		pr_err("md/raid0: please set raid0.default_layout to 1 or 2\n");
-		err = -EOPNOTSUPP;
-		goto abort;
 	}
 
 	pr_debug("md/raid0:%s: done.\n", mdname(mddev));
@@ -572,12 +552,10 @@ static void raid0_handle_discard(struct mddev *mddev, struct bio *bio)
 
 static bool raid0_make_request(struct mddev *mddev, struct bio *bio)
 {
-	struct r0conf *conf = mddev->private;
 	struct strip_zone *zone;
 	struct md_rdev *tmp_dev;
 	sector_t bio_sector;
 	sector_t sector;
-	sector_t orig_sector;
 	unsigned chunk_sects;
 	unsigned sectors;
 
@@ -610,21 +588,8 @@ static bool raid0_make_request(struct mddev *mddev, struct bio *bio)
 		bio = split;
 	}
 
-	orig_sector = sector;
 	zone = find_zone(mddev->private, &sector);
-	switch (conf->layout) {
-	case RAID0_ORIG_LAYOUT:
-		tmp_dev = map_sector(mddev, zone, orig_sector, &sector);
-		break;
-	case RAID0_ALT_MULTIZONE_LAYOUT:
-		tmp_dev = map_sector(mddev, zone, sector, &sector);
-		break;
-	default:
-		WARN(1, "md/raid0:%s: Invalid layout\n", mdname(mddev));
-		bio_io_error(bio);
-		return true;
-	}
-
+	tmp_dev = map_sector(mddev, zone, sector, &sector);
 	bio_set_dev(bio, tmp_dev->bdev);
 	bio->bi_iter.bi_sector = sector + zone->dev_start +
 		tmp_dev->data_offset;
@@ -803,7 +768,7 @@ static void *raid0_takeover(struct mddev *mddev)
 	return ERR_PTR(-EINVAL);
 }
 
-static void raid0_quiesce(struct mddev *mddev, int quiesce)
+static void raid0_quiesce(struct mddev *mddev, int state)
 {
 }
 

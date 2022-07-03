@@ -78,9 +78,6 @@ static int xmon_gate;
 #define xmon_owner 0
 #endif /* CONFIG_SMP */
 
-#ifdef CONFIG_PPC_PSERIES
-static int set_indicator_token = RTAS_UNKNOWN_SERVICE;
-#endif
 static unsigned long in_xmon __read_mostly = 0;
 static int xmon_on = IS_ENABLED(CONFIG_XMON_DEFAULT);
 
@@ -360,6 +357,7 @@ static inline void disable_surveillance(void)
 #ifdef CONFIG_PPC_PSERIES
 	/* Since this can't be a module, args should end up below 4GB. */
 	static struct rtas_args args;
+	int token;
 
 	/*
 	 * At this point we have got all the cpus we can into
@@ -368,11 +366,11 @@ static inline void disable_surveillance(void)
 	 * If we did try to take rtas.lock there would be a
 	 * real possibility of deadlock.
 	 */
-	if (set_indicator_token == RTAS_UNKNOWN_SERVICE)
+	token = rtas_token("set-indicator");
+	if (token == RTAS_UNKNOWN_SERVICE)
 		return;
 
-	rtas_call_unlocked(&args, set_indicator_token, 3, 1, NULL,
-			   SURVEILLANCE_TOKEN, 0, 0);
+	rtas_call_unlocked(&args, token, 3, 1, NULL, SURVEILLANCE_TOKEN, 0, 0);
 
 #endif /* CONFIG_PPC_PSERIES */
 }
@@ -465,10 +463,8 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 	local_irq_save(flags);
 	hard_irq_disable();
 
-	if (!fromipi) {
-		tracing_enabled = tracing_is_on();
-		tracing_off();
-	}
+	tracing_enabled = tracing_is_on();
+	tracing_off();
 
 	bp = in_breakpoint_table(regs->nip, &offset);
 	if (bp != NULL) {
@@ -534,19 +530,14 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 
  waiting:
 	secondary = 1;
-	spin_begin();
 	while (secondary && !xmon_gate) {
 		if (in_xmon == 0) {
-			if (fromipi) {
-				spin_end();
+			if (fromipi)
 				goto leave;
-			}
 			secondary = test_and_set_bit(0, &in_xmon);
 		}
-		spin_cpu_relax();
-		touch_nmi_watchdog();
+		barrier();
 	}
-	spin_end();
 
 	if (!secondary && !xmon_gate) {
 		/* we are the first cpu to come in */
@@ -577,25 +568,21 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 		mb();
 		xmon_gate = 1;
 		barrier();
-		touch_nmi_watchdog();
 	}
 
  cmdloop:
 	while (in_xmon) {
 		if (secondary) {
-			spin_begin();
 			if (cpu == xmon_owner) {
 				if (!test_and_set_bit(0, &xmon_taken)) {
 					secondary = 0;
-					spin_end();
 					continue;
 				}
 				/* missed it */
 				while (cpu == xmon_owner)
-					spin_cpu_relax();
+					barrier();
 			}
-			spin_cpu_relax();
-			touch_nmi_watchdog();
+			barrier();
 		} else {
 			cmd = cmds(regs);
 			if (cmd != 0) {
@@ -1830,14 +1817,15 @@ static void dump_300_sprs(void)
 
 	printf("pidr   = %.16lx  tidr  = %.16lx\n",
 		mfspr(SPRN_PID), mfspr(SPRN_TIDR));
-	printf("psscr  = %.16lx\n",
-		hv ? mfspr(SPRN_PSSCR) : mfspr(SPRN_PSSCR_PR));
+	printf("asdr   = %.16lx  psscr = %.16lx\n",
+		mfspr(SPRN_ASDR), hv ? mfspr(SPRN_PSSCR)
+					: mfspr(SPRN_PSSCR_PR));
 
 	if (!hv)
 		return;
 
-	printf("ptcr   = %.16lx  asdr  = %.16lx\n",
-		mfspr(SPRN_PTCR), mfspr(SPRN_ASDR));
+	printf("ptcr   = %.16lx\n",
+		mfspr(SPRN_PTCR));
 #endif
 }
 
@@ -2351,8 +2339,6 @@ static void dump_one_paca(int cpu)
 	DUMP(p, slb_cache_ptr, "x");
 	for (i = 0; i < SLB_CACHE_ENTRIES; i++)
 		printf(" slb_cache[%d]:        = 0x%016lx\n", i, p->slb_cache[i]);
-
-	DUMP(p, rfi_flush_fallback_area, "px");
 #endif
 	DUMP(p, dscr_default, "llx");
 #ifdef CONFIG_PPC_BOOK3E
@@ -2437,16 +2423,13 @@ static void dump_pacas(void)
 static void dump_one_xive(int cpu)
 {
 	unsigned int hwid = get_hard_smp_processor_id(cpu);
-	bool hv = cpu_has_feature(CPU_FTR_HVMODE);
 
-	if (hv) {
-		opal_xive_dump(XIVE_DUMP_TM_HYP, hwid);
-		opal_xive_dump(XIVE_DUMP_TM_POOL, hwid);
-		opal_xive_dump(XIVE_DUMP_TM_OS, hwid);
-		opal_xive_dump(XIVE_DUMP_TM_USER, hwid);
-		opal_xive_dump(XIVE_DUMP_VP, hwid);
-		opal_xive_dump(XIVE_DUMP_EMU_STATE, hwid);
-	}
+	opal_xive_dump(XIVE_DUMP_TM_HYP, hwid);
+	opal_xive_dump(XIVE_DUMP_TM_POOL, hwid);
+	opal_xive_dump(XIVE_DUMP_TM_OS, hwid);
+	opal_xive_dump(XIVE_DUMP_TM_USER, hwid);
+	opal_xive_dump(XIVE_DUMP_VP, hwid);
+	opal_xive_dump(XIVE_DUMP_EMU_STATE, hwid);
 
 	if (setjmp(bus_error_jmp) != 0) {
 		catch_memory_errors = 0;
@@ -2491,11 +2474,6 @@ static void dump_xives(void)
 {
 	unsigned long num;
 	int c;
-
-	if (!xive_enabled()) {
-		printf("Xive disabled on this system\n");
-		return;
-	}
 
 	c = inchar();
 	if (c == 'a') {
@@ -3292,7 +3270,7 @@ void dump_segments(void)
 
 	printf("sr0-15 =");
 	for (i = 0; i < 16; ++i)
-		printf(" %x", mfsrin(i << 28));
+		printf(" %x", mfsrin(i));
 	printf("\n");
 }
 #endif
@@ -3478,14 +3456,6 @@ static void xmon_init(int enable)
 		__debugger_iabr_match = xmon_iabr_match;
 		__debugger_break_match = xmon_break_match;
 		__debugger_fault_handler = xmon_fault_handler;
-
-#ifdef CONFIG_PPC_PSERIES
-		/*
-		 * Get the token here to avoid trying to get a lock
-		 * during the crash, causing a deadlock.
-		 */
-		set_indicator_token = rtas_token("set-indicator");
-#endif
 	} else {
 		__debugger = NULL;
 		__debugger_ipi = NULL;

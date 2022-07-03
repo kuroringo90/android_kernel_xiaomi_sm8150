@@ -23,7 +23,6 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <sys/ioctl.h>
-#include <sys/types.h>
 #include <linux/gpio.h>
 
 int monitor_device(const char *device_name,

@@ -15,7 +15,6 @@ struct ovl_config {
 	bool default_permissions;
 	bool redirect_dir;
 	bool index;
-	bool override_creds;
 };
 
 /* private information held for overlayfs's superblock */
@@ -78,5 +77,5 @@ static inline struct ovl_inode *OVL_I(struct inode *inode)
 
 static inline struct dentry *ovl_upperdentry_dereference(struct ovl_inode *oi)
 {
-	return READ_ONCE(oi->__upperdentry);
+	return lockless_dereference(oi->__upperdentry);
 }

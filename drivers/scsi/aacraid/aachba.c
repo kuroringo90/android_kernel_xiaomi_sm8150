@@ -913,15 +913,8 @@ static void setinqstr(struct aac_dev *dev, void *data, int tindex)
 	memset(str, ' ', sizeof(*str));
 
 	if (sup_adap_info->adapter_type_text[0]) {
+		char *cp = sup_adap_info->adapter_type_text;
 		int c;
-		char *cp;
-		char *cname = kmemdup(sup_adap_info->adapter_type_text,
-				sizeof(sup_adap_info->adapter_type_text),
-								GFP_ATOMIC);
-		if (!cname)
-			return;
-
-		cp = cname;
 		if ((cp[0] == 'A') && (cp[1] == 'O') && (cp[2] == 'C'))
 			inqstrcpy("SMC", str->vid);
 		else {
@@ -930,7 +923,7 @@ static void setinqstr(struct aac_dev *dev, void *data, int tindex)
 				++cp;
 			c = *cp;
 			*cp = '\0';
-			inqstrcpy(cname, str->vid);
+			inqstrcpy(sup_adap_info->adapter_type_text, str->vid);
 			*cp = c;
 			while (*cp && *cp != ' ')
 				++cp;
@@ -944,8 +937,8 @@ static void setinqstr(struct aac_dev *dev, void *data, int tindex)
 			cp[sizeof(str->pid)] = '\0';
 		}
 		inqstrcpy (cp, str->pid);
-
-		kfree(cname);
+		if (c)
+			cp[sizeof(str->pid)] = c;
 	} else {
 		struct aac_driver_ident *mp = aac_get_driver_ident(dev->cardtype);
 
@@ -2322,13 +2315,13 @@ static int aac_read(struct scsi_cmnd * scsicmd)
 		scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8 |
 			SAM_STAT_CHECK_CONDITION;
 		set_sense(&dev->fsa_dev[cid].sense_data,
-			  ILLEGAL_REQUEST, SENCODE_LBA_OUT_OF_RANGE,
+			  HARDWARE_ERROR, SENCODE_INTERNAL_TARGET_FAILURE,
 			  ASENCODE_INTERNAL_TARGET_FAILURE, 0, 0);
 		memcpy(scsicmd->sense_buffer, &dev->fsa_dev[cid].sense_data,
 		       min_t(size_t, sizeof(dev->fsa_dev[cid].sense_data),
 			     SCSI_SENSE_BUFFERSIZE));
 		scsicmd->scsi_done(scsicmd);
-		return 0;
+		return 1;
 	}
 
 	dprintk((KERN_DEBUG "aac_read[cpu %d]: lba = %llu, t = %ld.\n",
@@ -2414,13 +2407,13 @@ static int aac_write(struct scsi_cmnd * scsicmd)
 		scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8 |
 			SAM_STAT_CHECK_CONDITION;
 		set_sense(&dev->fsa_dev[cid].sense_data,
-			  ILLEGAL_REQUEST, SENCODE_LBA_OUT_OF_RANGE,
+			  HARDWARE_ERROR, SENCODE_INTERNAL_TARGET_FAILURE,
 			  ASENCODE_INTERNAL_TARGET_FAILURE, 0, 0);
 		memcpy(scsicmd->sense_buffer, &dev->fsa_dev[cid].sense_data,
 		       min_t(size_t, sizeof(dev->fsa_dev[cid].sense_data),
 			     SCSI_SENSE_BUFFERSIZE));
 		scsicmd->scsi_done(scsicmd);
-		return 0;
+		return 1;
 	}
 
 	dprintk((KERN_DEBUG "aac_write[cpu %d]: lba = %llu, t = %ld.\n",

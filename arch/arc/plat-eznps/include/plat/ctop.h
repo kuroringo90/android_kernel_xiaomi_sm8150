@@ -21,7 +21,6 @@
 #error "Incorrect ctop.h include"
 #endif
 
-#include <linux/types.h>
 #include <soc/nps/common.h>
 
 /* core auxiliary registers */
@@ -43,6 +42,7 @@
 #define CTOP_AUX_DPC				(CTOP_AUX_BASE + 0x02C)
 #define CTOP_AUX_LPC				(CTOP_AUX_BASE + 0x030)
 #define CTOP_AUX_EFLAGS				(CTOP_AUX_BASE + 0x080)
+#define CTOP_AUX_IACK				(CTOP_AUX_BASE + 0x088)
 #define CTOP_AUX_GPA1				(CTOP_AUX_BASE + 0x08C)
 #define CTOP_AUX_UDMC				(CTOP_AUX_BASE + 0x300)
 
@@ -143,15 +143,6 @@ struct nps_host_reg_gim_p_int_dst {
 };
 
 /* AUX registers definition */
-struct nps_host_reg_aux_dpc {
-	union {
-		struct {
-			u32 ien:1, men:1, hen:1, reserved:29;
-		};
-		u32 value;
-	};
-};
-
 struct nps_host_reg_aux_udmc {
 	union {
 		struct {

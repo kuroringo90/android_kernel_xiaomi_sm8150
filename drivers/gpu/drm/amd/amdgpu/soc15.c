@@ -279,12 +279,7 @@ static void soc15_init_golden_registers(struct amdgpu_device *adev)
 }
 static u32 soc15_get_xclk(struct amdgpu_device *adev)
 {
-	u32 reference_clock = adev->clock.spll.reference_freq;
-
-	if (adev->asic_type == CHIP_RAVEN)
-		return reference_clock / 4;
-
-	return reference_clock;
+	return adev->clock.spll.reference_freq;
 }
 
 
@@ -666,8 +661,8 @@ static int soc15_common_early_init(void *handle)
 			AMD_CG_SUPPORT_MC_LS |
 			AMD_CG_SUPPORT_SDMA_MGCG |
 			AMD_CG_SUPPORT_SDMA_LS;
-		adev->pg_flags = AMD_PG_SUPPORT_SDMA;
-
+		adev->pg_flags = AMD_PG_SUPPORT_SDMA |
+				 AMD_PG_SUPPORT_MMHUB;
 		adev->external_rev_id = 0x1;
 		break;
 	default:

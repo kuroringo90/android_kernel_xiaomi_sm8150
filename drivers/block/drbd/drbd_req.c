@@ -207,8 +207,7 @@ void start_new_tl_epoch(struct drbd_connection *connection)
 void complete_master_bio(struct drbd_device *device,
 		struct bio_and_error *m)
 {
-	if (unlikely(m->error))
-		m->bio->bi_status = errno_to_blk_status(m->error);
+	m->bio->bi_status = errno_to_blk_status(m->error);
 	bio_endio(m->bio);
 	dec_ap_bio(device);
 }
@@ -1245,8 +1244,8 @@ drbd_request_prepare(struct drbd_device *device, struct bio *bio, unsigned long 
 	_drbd_start_io_acct(device, req);
 
 	/* process discards always from our submitter thread */
-	if (bio_op(bio) == REQ_OP_WRITE_ZEROES ||
-	    bio_op(bio) == REQ_OP_DISCARD)
+	if ((bio_op(bio) & REQ_OP_WRITE_ZEROES) ||
+	    (bio_op(bio) & REQ_OP_DISCARD))
 		goto queue_for_submitter_thread;
 
 	if (rw == WRITE && req->private_bio && req->i.size

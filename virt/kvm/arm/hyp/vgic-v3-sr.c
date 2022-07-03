@@ -215,8 +215,7 @@ void __hyp_text __vgic_v3_save_state(struct kvm_vcpu *vcpu)
 	 * are now visible to the system register interface.
 	 */
 	if (!cpu_if->vgic_sre) {
-		dsb(sy);
-		isb();
+		dsb(st);
 		cpu_if->vgic_vmcr = read_gicreg(ICH_VMCR_EL2);
 	}
 

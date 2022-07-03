@@ -24,8 +24,6 @@
 #include <linux/btrfs.h>
 #include "async-thread.h"
 
-#define BTRFS_MAX_DATA_CHUNK_SIZE	(10ULL * SZ_1G)
-
 extern struct mutex uuid_mutex;
 
 #define BTRFS_STRIPE_LEN	SZ_64K
@@ -61,11 +59,6 @@ struct btrfs_device {
 
 	spinlock_t io_lock ____cacheline_aligned;
 	int running_pending;
-	/* When true means this device has pending chunk alloc in
-	 * current transaction. Protected by chunk_mutex.
-	 */
-	bool has_pending_chunks;
-
 	/* regular prio bios */
 	struct btrfs_pending_bios pending_bios;
 	/* sync bios */
@@ -317,6 +310,7 @@ struct btrfs_bio {
 	u64 map_type; /* get from map_lookup->type */
 	bio_end_io_t *end_io;
 	struct bio *orig_bio;
+	unsigned long flags;
 	void *private;
 	atomic_t error;
 	int max_errors;
@@ -504,12 +498,6 @@ static inline void btrfs_dev_stat_inc(struct btrfs_device *dev,
 				      int index)
 {
 	atomic_inc(dev->dev_stat_values + index);
-	/*
-	 * This memory barrier orders stores updating statistics before stores
-	 * updating dev_stats_ccnt.
-	 *
-	 * It pairs with smp_rmb() in btrfs_run_dev_stats().
-	 */
 	smp_mb__before_atomic();
 	atomic_inc(&dev->dev_stats_ccnt);
 }
@@ -535,12 +523,6 @@ static inline void btrfs_dev_stat_set(struct btrfs_device *dev,
 				      int index, unsigned long val)
 {
 	atomic_set(dev->dev_stat_values + index, val);
-	/*
-	 * This memory barrier orders stores updating statistics before stores
-	 * updating dev_stats_ccnt.
-	 *
-	 * It pairs with smp_rmb() in btrfs_run_dev_stats().
-	 */
 	smp_mb__before_atomic();
 	atomic_inc(&dev->dev_stats_ccnt);
 }

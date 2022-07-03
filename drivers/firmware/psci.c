@@ -40,15 +40,6 @@
  * For such calls PSCI_FN_NATIVE(version, name) will choose the appropriate
  * (native-width) function ID.
  */
-
-#ifdef CONFIG_THUMB2_KERNEL
-#define cpu_resume_secondary cpu_resume_arm
-extern void cpu_resume_arm(void);
-#else
-#define cpu_resume_secondary cpu_resume
-extern void cpu_resume(void);
-#endif
-
 #ifdef CONFIG_64BIT
 #define PSCI_FN_NATIVE(version, name)	PSCI_##version##_FN64_##name
 #else
@@ -68,25 +59,7 @@ bool psci_tos_resident_on(int cpu)
 	return cpu == resident_cpu;
 }
 
-struct psci_operations psci_ops = {
-	.conduit = PSCI_CONDUIT_NONE,
-	.smccc_version = SMCCC_VERSION_1_0,
-};
-
-enum arm_smccc_conduit arm_smccc_1_1_get_conduit(void)
-{
-	if (psci_ops.smccc_version < SMCCC_VERSION_1_1)
-		return SMCCC_CONDUIT_NONE;
-
-	switch (psci_ops.conduit) {
-	case PSCI_CONDUIT_SMC:
-		return SMCCC_CONDUIT_SMC;
-	case PSCI_CONDUIT_HVC:
-		return SMCCC_CONDUIT_HVC;
-	default:
-		return SMCCC_CONDUIT_NONE;
-	}
-}
+struct psci_operations psci_ops;
 
 typedef unsigned long (psci_fn)(unsigned long, unsigned long,
 				unsigned long, unsigned long);
@@ -237,22 +210,6 @@ static unsigned long psci_migrate_info_up_cpu(void)
 			      0, 0, 0);
 }
 
-static void set_conduit(enum psci_conduit conduit)
-{
-	switch (conduit) {
-	case PSCI_CONDUIT_HVC:
-		invoke_psci_fn = __invoke_psci_fn_hvc;
-		break;
-	case PSCI_CONDUIT_SMC:
-		invoke_psci_fn = __invoke_psci_fn_smc;
-		break;
-	default:
-		WARN(1, "Unexpected PSCI conduit %d\n", conduit);
-	}
-
-	psci_ops.conduit = conduit;
-}
-
 static int get_set_conduit_method(struct device_node *np)
 {
 	const char *method;
@@ -265,9 +222,9 @@ static int get_set_conduit_method(struct device_node *np)
 	}
 
 	if (!strcmp("hvc", method)) {
-		set_conduit(PSCI_CONDUIT_HVC);
+		invoke_psci_fn = __invoke_psci_fn_hvc;
 	} else if (!strcmp("smc", method)) {
-		set_conduit(PSCI_CONDUIT_SMC);
+		invoke_psci_fn = __invoke_psci_fn_smc;
 	} else {
 		pr_warn("invalid \"method\" property: %s\n", method);
 		return -EINVAL;
@@ -292,9 +249,8 @@ static int __init psci_features(u32 psci_func_id)
 }
 
 #ifdef CONFIG_CPU_IDLE
-static __maybe_unused DEFINE_PER_CPU_READ_MOSTLY(u32 *, psci_power_state);
+static DEFINE_PER_CPU_READ_MOSTLY(u32 *, psci_power_state);
 
-#ifdef CONFIG_DT_IDLE_STATES
 static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
 {
 	int i, ret, count = 0;
@@ -347,10 +303,6 @@ free_mem:
 	kfree(psci_states);
 	return ret;
 }
-#else
-static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
-{ return 0; }
-#endif
 
 #ifdef CONFIG_ACPI
 #include <acpi/processor.h>
@@ -426,26 +378,29 @@ int psci_cpu_init_idle(unsigned int cpu)
 	return ret;
 }
 
-static int psci_suspend_finisher(unsigned long state_id)
+static int psci_suspend_finisher(unsigned long index)
 {
-	return psci_ops.cpu_suspend(state_id,
-				    __pa_symbol(cpu_resume_secondary));
+	u32 *state = __this_cpu_read(psci_power_state);
+
+	return psci_ops.cpu_suspend(state[index - 1],
+				    __pa_symbol(cpu_resume));
 }
-int psci_cpu_suspend_enter(unsigned long state_id)
+
+int psci_cpu_suspend_enter(unsigned long index)
 {
 	int ret;
-
+	u32 *state = __this_cpu_read(psci_power_state);
 	/*
 	 * idle state index 0 corresponds to wfi, should never be called
 	 * from the cpu_suspend operations
 	 */
-	if (WARN_ON_ONCE(!state_id))
+	if (WARN_ON_ONCE(!index))
 		return -EINVAL;
 
-	if (!psci_power_state_loses_context(state_id))
-		ret = psci_ops.cpu_suspend(state_id, 0);
+	if (!psci_power_state_loses_context(state[index - 1]))
+		ret = psci_ops.cpu_suspend(state[index - 1], 0);
 	else
-		ret = cpu_suspend(state_id, psci_suspend_finisher);
+		ret = cpu_suspend(index, psci_suspend_finisher);
 
 	return ret;
 }
@@ -464,7 +419,7 @@ CPUIDLE_METHOD_OF_DECLARE(psci, "psci", &psci_cpuidle_ops);
 static int psci_system_suspend(unsigned long unused)
 {
 	return invoke_psci_fn(PSCI_FN_NATIVE(1_0, SYSTEM_SUSPEND),
-			      __pa_symbol(cpu_resume_secondary), 0, 0);
+			      __pa_symbol(cpu_resume), 0, 0);
 }
 
 static int psci_system_suspend_enter(suspend_state_t state)
@@ -538,36 +493,9 @@ static void __init psci_init_migrate(void)
 	pr_info("Trusted OS resident on physical CPU 0x%lx\n", cpuid);
 }
 
-static void __init psci_init_smccc(void)
-{
-	u32 ver = ARM_SMCCC_VERSION_1_0;
-	int feature;
-
-	feature = psci_features(ARM_SMCCC_VERSION_FUNC_ID);
-
-	if (feature != PSCI_RET_NOT_SUPPORTED) {
-		u32 ret;
-		ret = invoke_psci_fn(ARM_SMCCC_VERSION_FUNC_ID, 0, 0, 0);
-		if (ret == ARM_SMCCC_VERSION_1_1) {
-			psci_ops.smccc_version = SMCCC_VERSION_1_1;
-			ver = ret;
-		}
-	}
-
-	/*
-	 * Conveniently, the SMCCC and PSCI versions are encoded the
-	 * same way. No, this isn't accidental.
-	 */
-	pr_info("SMC Calling Convention v%d.%d\n",
-		PSCI_VERSION_MAJOR(ver), PSCI_VERSION_MINOR(ver));
-
-}
-
 static void __init psci_0_2_set_functions(void)
 {
 	pr_info("Using standard PSCI v0.2 function IDs\n");
-	psci_ops.get_version = psci_get_version;
-
 	psci_function_id[PSCI_FN_CPU_SUSPEND] =
 					PSCI_FN_NATIVE(0_2, CPU_SUSPEND);
 	psci_ops.cpu_suspend = psci_cpu_suspend;
@@ -611,7 +539,6 @@ static int __init psci_probe(void)
 	psci_init_migrate();
 
 	if (PSCI_VERSION_MAJOR(ver) >= 1) {
-		psci_init_smccc();
 		psci_init_cpu_suspend();
 		psci_init_system_suspend();
 	}
@@ -725,9 +652,9 @@ int __init psci_acpi_init(void)
 	pr_info("probing for conduit method from ACPI.\n");
 
 	if (acpi_psci_use_hvc())
-		set_conduit(PSCI_CONDUIT_HVC);
+		invoke_psci_fn = __invoke_psci_fn_hvc;
 	else
-		set_conduit(PSCI_CONDUIT_SMC);
+		invoke_psci_fn = __invoke_psci_fn_smc;
 
 	return psci_probe();
 }

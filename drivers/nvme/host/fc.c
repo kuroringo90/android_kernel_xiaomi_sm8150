@@ -41,7 +41,6 @@
 
 enum nvme_fc_queue_flags {
 	NVME_FC_Q_CONNECTED = (1 << 0),
-	NVME_FC_Q_LIVE = (1 << 1),
 };
 
 #define NVMEFC_QUEUE_DELAY	3		/* ms units */
@@ -1492,7 +1491,7 @@ __nvme_fc_init_request(struct nvme_fc_ctrl *ctrl,
 	if (fc_dma_mapping_error(ctrl->lport->dev, op->fcp_req.cmddma)) {
 		dev_err(ctrl->dev,
 			"FCP Op failed - cmdiu dma mapping failed.\n");
-		ret = -EFAULT;
+		ret = EFAULT;
 		goto out_on_error;
 	}
 
@@ -1502,7 +1501,7 @@ __nvme_fc_init_request(struct nvme_fc_ctrl *ctrl,
 	if (fc_dma_mapping_error(ctrl->lport->dev, op->fcp_req.rspdma)) {
 		dev_err(ctrl->dev,
 			"FCP Op failed - rspiu dma mapping failed.\n");
-		ret = -EFAULT;
+		ret = EFAULT;
 	}
 
 	atomic_set(&op->state, FCPOP_STATE_IDLE);
@@ -1566,7 +1565,6 @@ nvme_fc_term_aen_ops(struct nvme_fc_ctrl *ctrl)
 	struct nvme_fc_fcp_op *aen_op;
 	int i;
 
-	cancel_work_sync(&ctrl->ctrl.async_event_work);
 	aen_op = ctrl->aen_ops;
 	for (i = 0; i < NVME_FC_NR_AEN_COMMANDS; i++, aen_op++) {
 		if (!aen_op->fcp_req.private)
@@ -1656,7 +1654,6 @@ nvme_fc_free_queue(struct nvme_fc_queue *queue)
 	if (!test_and_clear_bit(NVME_FC_Q_CONNECTED, &queue->flags))
 		return;
 
-	clear_bit(NVME_FC_Q_LIVE, &queue->flags);
 	/*
 	 * Current implementation never disconnects a single queue.
 	 * It always terminates a whole association. So there is never
@@ -1664,6 +1661,7 @@ nvme_fc_free_queue(struct nvme_fc_queue *queue)
 	 */
 
 	queue->connection_id = 0;
+	clear_bit(NVME_FC_Q_CONNECTED, &queue->flags);
 }
 
 static void
@@ -1742,8 +1740,6 @@ nvme_fc_connect_io_queues(struct nvme_fc_ctrl *ctrl, u16 qsize)
 		ret = nvmf_connect_io_queue(&ctrl->ctrl, i);
 		if (ret)
 			break;
-
-		set_bit(NVME_FC_Q_LIVE, &ctrl->queues[i].flags);
 	}
 
 	return ret;
@@ -2052,14 +2048,6 @@ busy:
 	return BLK_STS_RESOURCE;
 }
 
-static inline blk_status_t nvme_fc_is_ready(struct nvme_fc_queue *queue,
-		struct request *rq)
-{
-	if (unlikely(!test_bit(NVME_FC_Q_LIVE, &queue->flags)))
-		return nvmf_check_init_req(&queue->ctrl->ctrl, rq);
-	return BLK_STS_OK;
-}
-
 static blk_status_t
 nvme_fc_queue_rq(struct blk_mq_hw_ctx *hctx,
 			const struct blk_mq_queue_data *bd)
@@ -2074,10 +2062,6 @@ nvme_fc_queue_rq(struct blk_mq_hw_ctx *hctx,
 	enum nvmefc_fcp_datadir	io_dir;
 	u32 data_len;
 	blk_status_t ret;
-
-	ret = nvme_fc_is_ready(queue, rq);
-	if (unlikely(ret))
-		return ret;
 
 	ret = nvme_setup_cmd(ns, rq, sqe);
 	if (ret)
@@ -2413,8 +2397,6 @@ nvme_fc_create_association(struct nvme_fc_ctrl *ctrl)
 	ret = nvmf_connect_admin_queue(&ctrl->ctrl);
 	if (ret)
 		goto out_disconnect_admin_queue;
-
-	set_bit(NVME_FC_Q_LIVE, &ctrl->queues[0].flags);
 
 	/*
 	 * Check controller capabilities
@@ -2869,10 +2851,6 @@ nvme_fc_init_ctrl(struct device *dev, struct nvmf_ctrl_options *opts,
 	}
 
 	if (ret) {
-		nvme_change_ctrl_state(&ctrl->ctrl, NVME_CTRL_DELETING);
-		cancel_work_sync(&ctrl->ctrl.reset_work);
-		cancel_delayed_work_sync(&ctrl->connect_work);
-
 		/* couldn't schedule retry - fail out */
 		dev_err(ctrl->ctrl.device,
 			"NVME-FC{%d}: Connect retry failed\n", ctrl->cnum);
@@ -2881,6 +2859,7 @@ nvme_fc_init_ctrl(struct device *dev, struct nvmf_ctrl_options *opts,
 
 		/* initiate nvme ctrl ref counting teardown */
 		nvme_uninit_ctrl(&ctrl->ctrl);
+		nvme_put_ctrl(&ctrl->ctrl);
 
 		/* Remove core ctrl ref. */
 		nvme_put_ctrl(&ctrl->ctrl);
@@ -3012,14 +2991,12 @@ nvme_fc_create_ctrl(struct device *dev, struct nvmf_ctrl_options *opts)
 	spin_lock_irqsave(&nvme_fc_lock, flags);
 	list_for_each_entry(lport, &nvme_fc_lport_list, port_list) {
 		if (lport->localport.node_name != laddr.nn ||
-		    lport->localport.port_name != laddr.pn ||
-		    lport->localport.port_state != FC_OBJSTATE_ONLINE)
+		    lport->localport.port_name != laddr.pn)
 			continue;
 
 		list_for_each_entry(rport, &lport->endp_list, endp_list) {
 			if (rport->remoteport.node_name != raddr.nn ||
-			    rport->remoteport.port_name != raddr.pn ||
-			    rport->remoteport.port_state != FC_OBJSTATE_ONLINE)
+			    rport->remoteport.port_name != raddr.pn)
 				continue;
 
 			/* if fail to get reference fall through. Will error */

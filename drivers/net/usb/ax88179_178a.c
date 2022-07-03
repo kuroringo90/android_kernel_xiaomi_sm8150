@@ -307,12 +307,12 @@ static int ax88179_read_cmd(struct usbnet *dev, u8 cmd, u16 value, u16 index,
 	int ret;
 
 	if (2 == size) {
-		u16 buf = 0;
+		u16 buf;
 		ret = __ax88179_read_cmd(dev, cmd, value, index, size, &buf, 0);
 		le16_to_cpus(&buf);
 		*((u16 *)data) = buf;
 	} else if (4 == size) {
-		u32 buf = 0;
+		u32 buf;
 		ret = __ax88179_read_cmd(dev, cmd, value, index, size, &buf, 0);
 		le32_to_cpus(&buf);
 		*((u32 *)data) = buf;
@@ -565,9 +565,6 @@ ax88179_set_wol(struct net_device *net, struct ethtool_wolinfo *wolinfo)
 {
 	struct usbnet *dev = netdev_priv(net);
 	u8 opt = 0;
-
-	if (wolinfo->wolopts & ~(WAKE_PHY | WAKE_MAGIC))
-		return -EINVAL;
 
 	if (wolinfo->wolopts & WAKE_PHY)
 		opt |= AX_MONITOR_MODE_RWLC;
@@ -1373,69 +1370,58 @@ static int ax88179_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 	u16 hdr_off;
 	u32 *pkt_hdr;
 
-	/* At the end of the SKB, there's a header telling us how many packets
-	 * are bundled into this buffer and where we can find an array of
-	 * per-packet metadata (which contains elements encoded into u16).
-	 */
-	if (skb->len < 4)
+	/* This check is no longer done by usbnet */
+	if (skb->len < dev->net->hard_header_len)
 		return 0;
+
 	skb_trim(skb, skb->len - 4);
 	memcpy(&rx_hdr, skb_tail_pointer(skb), 4);
 	le32_to_cpus(&rx_hdr);
+
 	pkt_cnt = (u16)rx_hdr;
 	hdr_off = (u16)(rx_hdr >> 16);
-
-	if (pkt_cnt == 0)
-		return 0;
-
-	/* Make sure that the bounds of the metadata array are inside the SKB
-	 * (and in front of the counter at the end).
-	 */
-	if (pkt_cnt * 2 + hdr_off > skb->len)
-		return 0;
 	pkt_hdr = (u32 *)(skb->data + hdr_off);
 
-	/* Packets must not overlap the metadata array */
-	skb_trim(skb, hdr_off);
-
-	for (; ; pkt_cnt--, pkt_hdr++) {
+	while (pkt_cnt--) {
 		u16 pkt_len;
 
 		le32_to_cpus(pkt_hdr);
 		pkt_len = (*pkt_hdr >> 16) & 0x1fff;
 
-		if (pkt_len > skb->len)
-			return 0;
-
 		/* Check CRC or runt packet */
-		if (((*pkt_hdr & (AX_RXHDR_CRC_ERR | AX_RXHDR_DROP_ERR)) == 0) &&
-		    pkt_len >= 2 + ETH_HLEN) {
-			bool last = (pkt_cnt == 0);
-
-			if (last) {
-				ax_skb = skb;
-			} else {
-				ax_skb = skb_clone(skb, GFP_ATOMIC);
-				if (!ax_skb)
-					return 0;
-			}
-			ax_skb->len = pkt_len;
-			/* Skip IP alignment pseudo header */
-			skb_pull(ax_skb, 2);
-			skb_set_tail_pointer(ax_skb, ax_skb->len);
-			ax_skb->truesize = pkt_len + sizeof(struct sk_buff);
-			ax88179_rx_checksum(ax_skb, pkt_hdr);
-
-			if (last)
-				return 1;
-
-			usbnet_skb_return(dev, ax_skb);
+		if ((*pkt_hdr & AX_RXHDR_CRC_ERR) ||
+		    (*pkt_hdr & AX_RXHDR_DROP_ERR)) {
+			skb_pull(skb, (pkt_len + 7) & 0xFFF8);
+			pkt_hdr++;
+			continue;
 		}
 
-		/* Trim this packet away from the SKB */
-		if (!skb_pull(skb, (pkt_len + 7) & 0xFFF8))
+		if (pkt_cnt == 0) {
+			/* Skip IP alignment psudo header */
+			skb_pull(skb, 2);
+			skb->len = pkt_len;
+			skb_set_tail_pointer(skb, pkt_len);
+			skb->truesize = pkt_len + sizeof(struct sk_buff);
+			ax88179_rx_checksum(skb, pkt_hdr);
+			return 1;
+		}
+
+		ax_skb = skb_clone(skb, GFP_ATOMIC);
+		if (ax_skb) {
+			ax_skb->len = pkt_len;
+			ax_skb->data = skb->data + 2;
+			skb_set_tail_pointer(ax_skb, pkt_len);
+			ax_skb->truesize = pkt_len + sizeof(struct sk_buff);
+			ax88179_rx_checksum(ax_skb, pkt_hdr);
+			usbnet_skb_return(dev, ax_skb);
+		} else {
 			return 0;
+		}
+
+		skb_pull(skb, (pkt_len + 7) & 0xFFF8);
+		pkt_hdr++;
 	}
+	return 1;
 }
 
 static struct sk_buff *
@@ -1453,8 +1439,7 @@ ax88179_tx_fixup(struct usbnet *dev, struct sk_buff *skb, gfp_t flags)
 
 	headroom = skb_headroom(skb) - 8;
 
-	if (((!(skb->fast_forwarded) && skb_header_cloned(skb)) ||
-	     headroom < 0) &&
+	if ((skb_header_cloned(skb) || headroom < 0) &&
 	    pskb_expand_head(skb, headroom < 0 ? 8 : 0, 0, GFP_ATOMIC)) {
 		dev_kfree_skb_any(skb);
 		return NULL;
@@ -1747,7 +1732,6 @@ static const struct driver_info belkin_info = {
 	.status = ax88179_status,
 	.link_reset = ax88179_link_reset,
 	.reset	= ax88179_reset,
-	.stop	= ax88179_stop,
 	.flags	= FLAG_ETHER | FLAG_FRAMING_AX,
 	.rx_fixup = ax88179_rx_fixup,
 	.tx_fixup = ax88179_tx_fixup,

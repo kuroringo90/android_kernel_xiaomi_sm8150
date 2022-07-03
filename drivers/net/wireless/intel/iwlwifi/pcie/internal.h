@@ -666,15 +666,11 @@ static inline u8 iwl_pcie_get_cmd_index(struct iwl_txq *q, u32 index)
 	return index & (q->n_window - 1);
 }
 
-static inline void *iwl_pcie_get_tfd(struct iwl_trans *trans,
+static inline void *iwl_pcie_get_tfd(struct iwl_trans_pcie *trans_pcie,
 				     struct iwl_txq *txq, int idx)
 {
-	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-
-	if (trans->cfg->use_tfh)
-		idx = iwl_pcie_get_cmd_index(txq, idx);
-
-	return txq->tfds + trans_pcie->tfd_size * idx;
+	return txq->tfds + trans_pcie->tfd_size * iwl_pcie_get_cmd_index(txq,
+									 idx);
 }
 
 static inline void iwl_enable_rfkill_int(struct iwl_trans *trans)

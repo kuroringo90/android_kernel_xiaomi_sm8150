@@ -7,7 +7,6 @@
 #include <linux/nmi.h>
 #include <asm/io.h>
 #include <asm/hyperv.h>
-#include <asm/nospec-branch.h>
 
 /*
  * The below CPUID leaves are present if VersionAndFeatures.HypervisorPresent
@@ -187,11 +186,10 @@ static inline u64 hv_do_hypercall(u64 control, void *input, void *output)
 		return U64_MAX;
 
 	__asm__ __volatile__("mov %4, %%r8\n"
-			     CALL_NOSPEC
+			     "call *%5"
 			     : "=a" (hv_status), ASM_CALL_CONSTRAINT,
 			       "+c" (control), "+d" (input_address)
-			     :  "r" (output_address),
-				THUNK_TARGET(hv_hypercall_pg)
+			     :  "r" (output_address), "m" (hv_hypercall_pg)
 			     : "cc", "memory", "r8", "r9", "r10", "r11");
 #else
 	u32 input_address_hi = upper_32_bits(input_address);
@@ -202,13 +200,13 @@ static inline u64 hv_do_hypercall(u64 control, void *input, void *output)
 	if (!hv_hypercall_pg)
 		return U64_MAX;
 
-	__asm__ __volatile__(CALL_NOSPEC
+	__asm__ __volatile__("call *%7"
 			     : "=A" (hv_status),
 			       "+c" (input_address_lo), ASM_CALL_CONSTRAINT
 			     : "A" (control),
 			       "b" (input_address_hi),
 			       "D"(output_address_hi), "S"(output_address_lo),
-			       THUNK_TARGET(hv_hypercall_pg)
+			       "m" (hv_hypercall_pg)
 			     : "cc", "memory");
 #endif /* !x86_64 */
 	return hv_status;
@@ -229,10 +227,10 @@ static inline u64 hv_do_fast_hypercall8(u16 code, u64 input1)
 
 #ifdef CONFIG_X86_64
 	{
-		__asm__ __volatile__(CALL_NOSPEC
+		__asm__ __volatile__("call *%4"
 				     : "=a" (hv_status), ASM_CALL_CONSTRAINT,
 				       "+c" (control), "+d" (input1)
-				     : THUNK_TARGET(hv_hypercall_pg)
+				     : "m" (hv_hypercall_pg)
 				     : "cc", "r8", "r9", "r10", "r11");
 	}
 #else
@@ -240,13 +238,13 @@ static inline u64 hv_do_fast_hypercall8(u16 code, u64 input1)
 		u32 input1_hi = upper_32_bits(input1);
 		u32 input1_lo = lower_32_bits(input1);
 
-		__asm__ __volatile__ (CALL_NOSPEC
+		__asm__ __volatile__ ("call *%5"
 				      : "=A"(hv_status),
 					"+c"(input1_lo),
 					ASM_CALL_CONSTRAINT
 				      :	"A" (control),
 					"b" (input1_hi),
-					THUNK_TARGET(hv_hypercall_pg)
+					"m" (hv_hypercall_pg)
 				      : "cc", "edi", "esi");
 	}
 #endif

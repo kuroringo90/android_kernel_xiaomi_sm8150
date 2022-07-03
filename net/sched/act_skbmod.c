@@ -131,11 +131,8 @@ static int tcf_skbmod_init(struct net *net, struct nlattr *nla,
 	if (exists && bind)
 		return 0;
 
-	if (!lflags) {
-		if (exists)
-			tcf_idr_release(*a, bind);
+	if (!lflags)
 		return -EINVAL;
-	}
 
 	if (!exists) {
 		ret = tcf_idr_create(tn, parm->index, est, a,
@@ -155,7 +152,7 @@ static int tcf_skbmod_init(struct net *net, struct nlattr *nla,
 	ASSERT_RTNL();
 	p = kzalloc(sizeof(struct tcf_skbmod_params), GFP_KERNEL);
 	if (unlikely(!p)) {
-		if (ret == ACT_P_CREATED)
+		if (ovr)
 			tcf_idr_release(*a, bind);
 		return -ENOMEM;
 	}
@@ -193,8 +190,7 @@ static void tcf_skbmod_cleanup(struct tc_action *a, int bind)
 	struct tcf_skbmod_params  *p;
 
 	p = rcu_dereference_protected(d->skbmod_p, 1);
-	if (p)
-		kfree_rcu(p, rcu);
+	kfree_rcu(p, rcu);
 }
 
 static int tcf_skbmod_dump(struct sk_buff *skb, struct tc_action *a,
@@ -267,7 +263,7 @@ static __net_init int skbmod_init_net(struct net *net)
 {
 	struct tc_action_net *tn = net_generic(net, skbmod_net_id);
 
-	return tc_action_net_init(net, tn, &act_skbmod_ops);
+	return tc_action_net_init(tn, &act_skbmod_ops);
 }
 
 static void __net_exit skbmod_exit_net(struct net *net)

@@ -262,16 +262,15 @@ static long kvmppc_rm_tce_iommu_map(struct kvm *kvm, struct iommu_table *tbl,
 	if (!mem)
 		return H_TOO_HARD;
 
-	if (WARN_ON_ONCE_RM(mm_iommu_ua_to_hpa_rm(mem, ua, tbl->it_page_shift,
-			&hpa)))
-		return H_TOO_HARD;
+	if (WARN_ON_ONCE_RM(mm_iommu_ua_to_hpa_rm(mem, ua, &hpa)))
+		return H_HARDWARE;
 
 	pua = (void *) vmalloc_to_phys(pua);
 	if (WARN_ON_ONCE_RM(!pua))
 		return H_HARDWARE;
 
 	if (WARN_ON_ONCE_RM(mm_iommu_mapped_inc(mem)))
-		return H_TOO_HARD;
+		return H_CLOSED;
 
 	ret = iommu_tce_xchg_rm(tbl, entry, &hpa, &dir);
 	if (ret) {
@@ -432,8 +431,7 @@ long kvmppc_rm_h_put_tce_indirect(struct kvm_vcpu *vcpu,
 
 		mem = mm_iommu_lookup_rm(vcpu->kvm->mm, ua, IOMMU_PAGE_SIZE_4K);
 		if (mem)
-			prereg = mm_iommu_ua_to_hpa_rm(mem, ua,
-					IOMMU_PAGE_SHIFT_4K, &tces) == 0;
+			prereg = mm_iommu_ua_to_hpa_rm(mem, ua, &tces) == 0;
 	}
 
 	if (!prereg) {
@@ -448,7 +446,7 @@ long kvmppc_rm_h_put_tce_indirect(struct kvm_vcpu *vcpu,
 
 		rmap = (void *) vmalloc_to_phys(rmap);
 		if (WARN_ON_ONCE_RM(!rmap))
-			return H_TOO_HARD;
+			return H_HARDWARE;
 
 		/*
 		 * Synchronize with the MMU notifier callbacks in
@@ -475,10 +473,8 @@ long kvmppc_rm_h_put_tce_indirect(struct kvm_vcpu *vcpu,
 		ua = 0;
 		if (kvmppc_gpa_to_ua(vcpu->kvm,
 				tce & ~(TCE_PCI_READ | TCE_PCI_WRITE),
-				&ua, NULL)) {
-			ret = H_PARAMETER;
-			goto unlock_exit;
-		}
+				&ua, NULL))
+			return H_PARAMETER;
 
 		list_for_each_entry_lockless(stit, &stt->iommu_tables, next) {
 			ret = kvmppc_rm_tce_iommu_map(vcpu->kvm,

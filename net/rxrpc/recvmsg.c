@@ -445,7 +445,7 @@ try_again:
 	    list_empty(&rx->recvmsg_q) &&
 	    rx->sk.sk_state != RXRPC_SERVER_LISTENING) {
 		release_sock(&rx->sk);
-		return -EAGAIN;
+		return -ENODATA;
 	}
 
 	if (list_empty(&rx->recvmsg_q)) {
@@ -513,16 +513,15 @@ try_again:
 			ret = put_cmsg(msg, SOL_RXRPC, RXRPC_USER_CALL_ID,
 				       sizeof(unsigned int), &id32);
 		} else {
-			unsigned long idl = call->user_call_ID;
-
 			ret = put_cmsg(msg, SOL_RXRPC, RXRPC_USER_CALL_ID,
-				       sizeof(unsigned long), &idl);
+				       sizeof(unsigned long),
+				       &call->user_call_ID);
 		}
 		if (ret < 0)
 			goto error_unlock_call;
 	}
 
-	if (msg->msg_name && call->peer) {
+	if (msg->msg_name) {
 		struct sockaddr_rxrpc *srx = msg->msg_name;
 		size_t len = sizeof(call->peer->srx);
 
@@ -588,7 +587,6 @@ error_requeue_call:
 	}
 error_no_call:
 	release_sock(&rx->sk);
-error_trace:
 	trace_rxrpc_recvmsg(call, rxrpc_recvmsg_return, 0, 0, 0, ret);
 	return ret;
 
@@ -597,7 +595,7 @@ wait_interrupted:
 wait_error:
 	finish_wait(sk_sleep(&rx->sk), &wait);
 	call = NULL;
-	goto error_trace;
+	goto error_no_call;
 }
 
 /**

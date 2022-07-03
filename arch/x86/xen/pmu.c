@@ -478,7 +478,7 @@ static void xen_convert_regs(const struct xen_pmu_regs *xen_regs,
 irqreturn_t xen_pmu_irq_handler(int irq, void *dev_id)
 {
 	int err, ret = IRQ_NONE;
-	struct pt_regs regs = {0};
+	struct pt_regs regs;
 	const struct xen_pmu_data *xenpmu_data = get_xenpmu_data();
 	uint8_t xenpmu_flags = get_xenpmu_flags();
 
@@ -505,7 +505,10 @@ irqreturn_t xen_pmu_irq_handler(int irq, void *dev_id)
 	return ret;
 }
 
-bool is_xen_pmu;
+bool is_xen_pmu(int cpu)
+{
+	return (get_xenpmu_data() != NULL);
+}
 
 void xen_pmu_init(int cpu)
 {
@@ -516,7 +519,7 @@ void xen_pmu_init(int cpu)
 
 	BUILD_BUG_ON(sizeof(struct xen_pmu_data) > PAGE_SIZE);
 
-	if (xen_hvm_domain() || (cpu != 0 && !is_xen_pmu))
+	if (xen_hvm_domain())
 		return;
 
 	xenpmu_data = (struct xen_pmu_data *)get_zeroed_page(GFP_KERNEL);
@@ -537,8 +540,7 @@ void xen_pmu_init(int cpu)
 	per_cpu(xenpmu_shared, cpu).xenpmu_data = xenpmu_data;
 	per_cpu(xenpmu_shared, cpu).flags = 0;
 
-	if (!is_xen_pmu) {
-		is_xen_pmu = true;
+	if (cpu == 0) {
 		perf_register_guest_info_callbacks(&xen_guest_cbs);
 		xen_pmu_arch_init();
 	}

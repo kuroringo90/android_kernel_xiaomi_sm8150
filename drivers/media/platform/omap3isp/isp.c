@@ -305,7 +305,7 @@ static struct clk *isp_xclk_src_get(struct of_phandle_args *clkspec, void *data)
 static int isp_xclk_init(struct isp_device *isp)
 {
 	struct device_node *np = isp->dev->of_node;
-	struct clk_init_data init = { 0 };
+	struct clk_init_data init;
 	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(isp->xclks); ++i)
@@ -727,10 +727,6 @@ static int isp_pipeline_enable(struct isp_pipeline *pipe,
 					s_stream, mode);
 			pipe->do_propagation = true;
 		}
-
-		/* Stop at the first external sub-device. */
-		if (subdev->dev != isp->dev)
-			break;
 	}
 
 	return 0;
@@ -845,10 +841,6 @@ static int isp_pipeline_disable(struct isp_pipeline *pipe)
 						      &subdev->entity);
 			failure = -ETIMEDOUT;
 		}
-
-		/* Stop at the first external sub-device. */
-		if (subdev->dev != isp->dev)
-			break;
 	}
 
 	return failure;
@@ -1600,8 +1592,6 @@ static void isp_pm_complete(struct device *dev)
 
 static void isp_unregister_entities(struct isp_device *isp)
 {
-	media_device_unregister(&isp->media_dev);
-
 	omap3isp_csi2_unregister_entities(&isp->isp_csi2a);
 	omap3isp_ccp2_unregister_entities(&isp->isp_ccp2);
 	omap3isp_ccdc_unregister_entities(&isp->isp_ccdc);
@@ -1612,6 +1602,7 @@ static void isp_unregister_entities(struct isp_device *isp)
 	omap3isp_stat_unregister_entities(&isp->isp_hist);
 
 	v4l2_device_unregister(&isp->v4l2_dev);
+	media_device_unregister(&isp->media_dev);
 	media_device_cleanup(&isp->media_dev);
 }
 
@@ -1954,7 +1945,6 @@ error_csi2:
 
 static void isp_detach_iommu(struct isp_device *isp)
 {
-	arm_iommu_detach_device(isp->dev);
 	arm_iommu_release_mapping(isp->mapping);
 	isp->mapping = NULL;
 }
@@ -1971,7 +1961,8 @@ static int isp_attach_iommu(struct isp_device *isp)
 	mapping = arm_iommu_create_mapping(&platform_bus_type, SZ_1G, SZ_2G);
 	if (IS_ERR(mapping)) {
 		dev_err(isp->dev, "failed to create ARM IOMMU mapping\n");
-		return PTR_ERR(mapping);
+		ret = PTR_ERR(mapping);
+		goto error;
 	}
 
 	isp->mapping = mapping;
@@ -1986,8 +1977,7 @@ static int isp_attach_iommu(struct isp_device *isp)
 	return 0;
 
 error:
-	arm_iommu_release_mapping(isp->mapping);
-	isp->mapping = NULL;
+	isp_detach_iommu(isp);
 	return ret;
 }
 
@@ -2304,10 +2294,8 @@ static int isp_probe(struct platform_device *pdev)
 		mem = platform_get_resource(pdev, IORESOURCE_MEM, i);
 		isp->mmio_base[map_idx] =
 			devm_ioremap_resource(isp->dev, mem);
-		if (IS_ERR(isp->mmio_base[map_idx])) {
-			ret = PTR_ERR(isp->mmio_base[map_idx]);
-			goto error;
-		}
+		if (IS_ERR(isp->mmio_base[map_idx]))
+			return PTR_ERR(isp->mmio_base[map_idx]);
 	}
 
 	ret = isp_get_clocks(isp);

@@ -39,9 +39,7 @@ struct property {
 	struct property *next;
 	unsigned long _flags;
 	unsigned int unique_id;
-#if defined(CONFIG_OF_KOBJ)
 	struct bin_attribute attr;
-#endif
 };
 
 #if defined(CONFIG_SPARC)
@@ -60,9 +58,7 @@ struct device_node {
 	struct	device_node *parent;
 	struct	device_node *child;
 	struct	device_node *sibling;
-#if defined(CONFIG_OF_KOBJ)
 	struct	kobject kobj;
-#endif
 	unsigned long _flags;
 	void	*data;
 #if defined(CONFIG_SPARC)
@@ -107,17 +103,21 @@ extern struct kobj_type of_node_ktype;
 extern const struct fwnode_operations of_fwnode_ops;
 static inline void of_node_init(struct device_node *node)
 {
-#if defined(CONFIG_OF_KOBJ)
 	kobject_init(&node->kobj, &of_node_ktype);
-#endif
 	node->fwnode.ops = &of_fwnode_ops;
 }
 
-#if defined(CONFIG_OF_KOBJ)
-#define of_node_kobj(n) (&(n)->kobj)
-#else
-#define of_node_kobj(n) NULL
-#endif
+/* true when node is initialized */
+static inline int of_node_is_initialized(struct device_node *node)
+{
+	return node && node->kobj.state_initialized;
+}
+
+/* true when node is attached (i.e. present on sysfs) */
+static inline int of_node_is_attached(struct device_node *node)
+{
+	return node && node->kobj.state_in_sysfs;
+}
 
 #ifdef CONFIG_OF_DYNAMIC
 extern struct device_node *of_node_get(struct device_node *node);
@@ -229,8 +229,8 @@ extern struct device_node *of_find_all_nodes(struct device_node *prev);
 static inline u64 of_read_number(const __be32 *cell, int size)
 {
 	u64 r = 0;
-	for (; size--; cell++)
-		r = (r << 32) | be32_to_cpu(*cell);
+	while (size--)
+		r = (r << 32) | be32_to_cpu(*(cell++));
 	return r;
 }
 
@@ -288,8 +288,6 @@ extern struct device_node *of_get_next_child(const struct device_node *node,
 extern struct device_node *of_get_next_available_child(
 	const struct device_node *node, struct device_node *prev);
 
-extern struct device_node *of_get_compatible_child(const struct device_node *parent,
-					const char *compatible);
 extern struct device_node *of_get_child_by_name(const struct device_node *node,
 					const char *name);
 
@@ -540,8 +538,6 @@ const char *of_prop_next_string(struct property *prop, const char *cur);
 
 bool of_console_check(struct device_node *dn, char *name, int index);
 
-extern int of_cpu_node_to_id(struct device_node *np);
-
 #else /* CONFIG_OF */
 
 static inline void of_core_init(void)
@@ -627,12 +623,6 @@ static inline struct device_node *of_find_node_with_property(
 static inline bool of_have_populated_dt(void)
 {
 	return false;
-}
-
-static inline struct device_node *of_get_compatible_child(const struct device_node *parent,
-					const char *compatible)
-{
-	return NULL;
 }
 
 static inline struct device_node *of_get_child_by_name(
@@ -880,11 +870,6 @@ static inline void of_property_set_flag(struct property *p, unsigned long flag)
 
 static inline void of_property_clear_flag(struct property *p, unsigned long flag)
 {
-}
-
-static inline int of_cpu_node_to_id(struct device_node *np)
-{
-	return -ENODEV;
 }
 
 #define of_match_ptr(_ptr)	NULL
@@ -1170,7 +1155,6 @@ static inline int of_get_available_child_count(const struct device_node *np)
 #define _OF_DECLARE(table, name, compat, fn, fn_type)			\
 	static const struct of_device_id __of_table_##name		\
 		__used __section(__##table##_of_table)			\
-		__aligned(__alignof__(struct of_device_id))		\
 		 = { .compatible = compat,				\
 		     .data = (fn == (fn_type)NULL) ? fn : fn  }
 #else

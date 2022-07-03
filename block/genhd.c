@@ -82,18 +82,6 @@ void part_in_flight(struct request_queue *q, struct hd_struct *part,
 	}
 }
 
-void part_in_flight_rw(struct request_queue *q, struct hd_struct *part,
-		       unsigned int inflight[2])
-{
-	if (q->mq_ops) {
-		blk_mq_in_flight_rw(q, part, inflight);
-		return;
-	}
-
-	inflight[0] = atomic_read(&part->in_flight[0]);
-	inflight[1] = atomic_read(&part->in_flight[1]);
-}
-
 struct hd_struct *__disk_get_part(struct gendisk *disk, int partno)
 {
 	struct disk_part_tbl *ptbl = rcu_dereference(disk->part_tbl);
@@ -208,17 +196,14 @@ struct hd_struct *disk_part_iter_next(struct disk_part_iter *piter)
 		part = rcu_dereference(ptbl->part[piter->idx]);
 		if (!part)
 			continue;
-		get_device(part_to_dev(part));
-		piter->part = part;
 		if (!part_nr_sects_read(part) &&
 		    !(piter->flags & DISK_PITER_INCL_EMPTY) &&
 		    !(piter->flags & DISK_PITER_INCL_EMPTY_PART0 &&
-		      piter->idx == 0)) {
-			put_device(part_to_dev(part));
-			piter->part = NULL;
+		      piter->idx == 0))
 			continue;
-		}
 
+		get_device(part_to_dev(part));
+		piter->part = part;
 		piter->idx += inc;
 		break;
 	}
@@ -675,8 +660,7 @@ void device_add_disk(struct device *parent, struct gendisk *disk)
 
 	/* Register BDI before referencing it from bdev */
 	bdi = disk->queue->backing_dev_info;
-	retval = bdi_register_owner(bdi, disk_to_dev(disk));
-	WARN_ON(retval);
+	bdi_register_owner(bdi, disk_to_dev(disk));
 
 	blk_register_region(disk_devt(disk), disk->minors, NULL,
 			    exact_match, exact_lock, disk);
@@ -689,11 +673,9 @@ void device_add_disk(struct device *parent, struct gendisk *disk)
 	 */
 	WARN_ON_ONCE(!blk_get_queue(disk->queue));
 
-	if (!retval) {
-		retval = sysfs_create_link(&disk_to_dev(disk)->kobj,
-				&bdi->dev->kobj, "bdi");
-		WARN_ON(retval);
-	}
+	retval = sysfs_create_link(&disk_to_dev(disk)->kobj, &bdi->dev->kobj,
+				   "bdi");
+	WARN_ON(retval);
 
 	disk_add_events(disk);
 	blk_integrity_add(disk);

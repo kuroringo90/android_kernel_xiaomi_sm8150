@@ -36,6 +36,8 @@ void amdgpu_gem_object_free(struct drm_gem_object *gobj)
 	struct amdgpu_bo *robj = gem_to_amdgpu_bo(gobj);
 
 	if (robj) {
+		if (robj->gem_base.import_attach)
+			drm_prime_gem_destroy(&robj->gem_base, robj->tbo.sg);
 		amdgpu_mn_unregister(robj);
 		amdgpu_bo_unref(&robj);
 	}
@@ -277,8 +279,6 @@ int amdgpu_gem_userptr_ioctl(struct drm_device *dev, void *data,
 	struct amdgpu_bo *bo;
 	uint32_t handle;
 	int r;
-
-	args->addr = untagged_addr(args->addr);
 
 	if (offset_in_page(args->addr | args->size))
 		return -EINVAL;
@@ -553,7 +553,6 @@ int amdgpu_gem_va_ioctl(struct drm_device *dev, void *data,
 	struct ww_acquire_ctx ticket;
 	struct list_head list;
 	uint64_t va_flags;
-	uint64_t vm_size;
 	int r = 0;
 
 	if (args->va_address < AMDGPU_VA_RESERVED_SIZE) {
@@ -561,15 +560,6 @@ int amdgpu_gem_va_ioctl(struct drm_device *dev, void *data,
 			"va_address 0x%lX is in reserved area 0x%X\n",
 			(unsigned long)args->va_address,
 			AMDGPU_VA_RESERVED_SIZE);
-		return -EINVAL;
-	}
-
-	vm_size = adev->vm_manager.max_pfn * AMDGPU_GPU_PAGE_SIZE;
-	vm_size -= AMDGPU_VA_RESERVED_SIZE;
-	if (args->va_address + args->map_size > vm_size) {
-		dev_dbg(&dev->pdev->dev,
-			"va_address 0x%llx is in top reserved area 0x%llx\n",
-			args->va_address + args->map_size, vm_size);
 		return -EINVAL;
 	}
 

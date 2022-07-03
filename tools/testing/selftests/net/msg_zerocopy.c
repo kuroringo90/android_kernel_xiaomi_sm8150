@@ -121,8 +121,9 @@ static int do_setcpu(int cpu)
 	CPU_ZERO(&mask);
 	CPU_SET(cpu, &mask);
 	if (sched_setaffinity(0, sizeof(mask), &mask))
-		fprintf(stderr, "cpu: unable to pin, may increase variance.\n");
-	else if (cfg_verbose)
+		error(1, 0, "setaffinity %d", cpu);
+
+	if (cfg_verbose)
 		fprintf(stderr, "cpu: %u\n", cpu);
 
 	return 0;
@@ -258,28 +259,22 @@ static int setup_ip6h(struct ipv6hdr *ip6h, uint16_t payload_len)
 	return sizeof(*ip6h);
 }
 
-
-static void setup_sockaddr(int domain, const char *str_addr,
-			   struct sockaddr_storage *sockaddr)
+static void setup_sockaddr(int domain, const char *str_addr, void *sockaddr)
 {
 	struct sockaddr_in6 *addr6 = (void *) sockaddr;
 	struct sockaddr_in *addr4 = (void *) sockaddr;
 
 	switch (domain) {
 	case PF_INET:
-		memset(addr4, 0, sizeof(*addr4));
 		addr4->sin_family = AF_INET;
 		addr4->sin_port = htons(cfg_port);
-		if (str_addr &&
-		    inet_pton(AF_INET, str_addr, &(addr4->sin_addr)) != 1)
+		if (inet_pton(AF_INET, str_addr, &(addr4->sin_addr)) != 1)
 			error(1, 0, "ipv4 parse error: %s", str_addr);
 		break;
 	case PF_INET6:
-		memset(addr6, 0, sizeof(*addr6));
 		addr6->sin6_family = AF_INET6;
 		addr6->sin6_port = htons(cfg_port);
-		if (str_addr &&
-		    inet_pton(AF_INET6, str_addr, &(addr6->sin6_addr)) != 1)
+		if (inet_pton(AF_INET6, str_addr, &(addr6->sin6_addr)) != 1)
 			error(1, 0, "ipv6 parse error: %s", str_addr);
 		break;
 	default:
@@ -608,7 +603,6 @@ static void parse_opts(int argc, char **argv)
 				    sizeof(struct tcphdr) -
 				    40 /* max tcp options */;
 	int c;
-	char *daddr = NULL, *saddr = NULL;
 
 	cfg_payload_len = max_payload_len;
 
@@ -633,7 +627,7 @@ static void parse_opts(int argc, char **argv)
 			cfg_cpu = strtol(optarg, NULL, 0);
 			break;
 		case 'D':
-			daddr = optarg;
+			setup_sockaddr(cfg_family, optarg, &cfg_dst_addr);
 			break;
 		case 'i':
 			cfg_ifindex = if_nametoindex(optarg);
@@ -644,7 +638,7 @@ static void parse_opts(int argc, char **argv)
 			cfg_cork_mixed = true;
 			break;
 		case 'p':
-			cfg_port = strtoul(optarg, NULL, 0);
+			cfg_port = htons(strtoul(optarg, NULL, 0));
 			break;
 		case 'r':
 			cfg_rx = true;
@@ -653,7 +647,7 @@ static void parse_opts(int argc, char **argv)
 			cfg_payload_len = strtoul(optarg, NULL, 0);
 			break;
 		case 'S':
-			saddr = optarg;
+			setup_sockaddr(cfg_family, optarg, &cfg_src_addr);
 			break;
 		case 't':
 			cfg_runtime_ms = 200 + strtoul(optarg, NULL, 10) * 1000;
@@ -666,8 +660,6 @@ static void parse_opts(int argc, char **argv)
 			break;
 		}
 	}
-	setup_sockaddr(cfg_family, daddr, &cfg_dst_addr);
-	setup_sockaddr(cfg_family, saddr, &cfg_src_addr);
 
 	if (cfg_payload_len > max_payload_len)
 		error(1, 0, "-s: payload exceeds max (%d)", max_payload_len);

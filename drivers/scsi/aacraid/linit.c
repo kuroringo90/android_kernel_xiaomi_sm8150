@@ -413,16 +413,13 @@ static int aac_slave_configure(struct scsi_device *sdev)
 	if (chn < AAC_MAX_BUSES && tid < AAC_MAX_TARGETS && aac->sa_firmware) {
 		devtype = aac->hba_map[chn][tid].devtype;
 
-		if (devtype == AAC_DEVTYPE_NATIVE_RAW) {
+		if (devtype == AAC_DEVTYPE_NATIVE_RAW)
 			depth = aac->hba_map[chn][tid].qd_limit;
-			set_timeout = 1;
-			goto common_config;
-		}
-		if (devtype == AAC_DEVTYPE_ARC_RAW) {
+		else if (devtype == AAC_DEVTYPE_ARC_RAW)
 			set_qd_dev_type = true;
-			set_timeout = 1;
-			goto common_config;
-		}
+
+		set_timeout = 1;
+		goto common_config;
 	}
 
 	if (aac->jbod && (sdev->type == TYPE_DISK))
@@ -736,11 +733,7 @@ static int aac_eh_abort(struct scsi_cmnd* cmd)
 		status = aac_hba_send(HBA_IU_TYPE_SCSI_TM_REQ, fib,
 				  (fib_callback) aac_hba_callback,
 				  (void *) cmd);
-		if (status != -EINPROGRESS) {
-			aac_fib_complete(fib);
-			aac_fib_free(fib);
-			return ret;
-		}
+
 		/* Wait up to 15 secs for completion */
 		for (count = 0; count < 15; ++count) {
 			if (cmd->SCp.sent_command) {
@@ -919,11 +912,11 @@ static int aac_eh_dev_reset(struct scsi_cmnd *cmd)
 
 	info = &aac->hba_map[bus][cid];
 
-	if (!(info->devtype == AAC_DEVTYPE_NATIVE_RAW &&
-	 !(info->reset_state > 0)))
+	if (info->devtype != AAC_DEVTYPE_NATIVE_RAW &&
+	    info->reset_state > 0)
 		return FAILED;
 
-	pr_err("%s: Host device reset request. SCSI hang ?\n",
+	pr_err("%s: Host adapter reset request. SCSI hang ?\n",
 	       AAC_DRIVERNAME);
 
 	fib = aac_fib_alloc(aac);
@@ -938,12 +931,7 @@ static int aac_eh_dev_reset(struct scsi_cmnd *cmd)
 	status = aac_hba_send(command, fib,
 			      (fib_callback) aac_tmf_callback,
 			      (void *) info);
-	if (status != -EINPROGRESS) {
-		info->reset_state = 0;
-		aac_fib_complete(fib);
-		aac_fib_free(fib);
-		return ret;
-	}
+
 	/* Wait up to 15 seconds for completion */
 	for (count = 0; count < 15; ++count) {
 		if (info->reset_state == 0) {
@@ -982,11 +970,11 @@ static int aac_eh_target_reset(struct scsi_cmnd *cmd)
 
 	info = &aac->hba_map[bus][cid];
 
-	if (!(info->devtype == AAC_DEVTYPE_NATIVE_RAW &&
-	 !(info->reset_state > 0)))
+	if (info->devtype != AAC_DEVTYPE_NATIVE_RAW &&
+	    info->reset_state > 0)
 		return FAILED;
 
-	pr_err("%s: Host target reset request. SCSI hang ?\n",
+	pr_err("%s: Host adapter reset request. SCSI hang ?\n",
 	       AAC_DRIVERNAME);
 
 	fib = aac_fib_alloc(aac);
@@ -1002,13 +990,6 @@ static int aac_eh_target_reset(struct scsi_cmnd *cmd)
 	status = aac_hba_send(command, fib,
 			      (fib_callback) aac_tmf_callback,
 			      (void *) info);
-
-	if (status != -EINPROGRESS) {
-		info->reset_state = 0;
-		aac_fib_complete(fib);
-		aac_fib_free(fib);
-		return ret;
-	}
 
 	/* Wait up to 15 seconds for completion */
 	for (count = 0; count < 15; ++count) {
@@ -1056,13 +1037,13 @@ static int aac_eh_bus_reset(struct scsi_cmnd* cmd)
 			info = &aac->hba_map[bus][cid];
 			if (bus >= AAC_MAX_BUSES || cid >= AAC_MAX_TARGETS ||
 			    info->devtype != AAC_DEVTYPE_NATIVE_RAW) {
-				fib->flags |= FIB_CONTEXT_FLAG_EH_RESET;
+				fib->flags |= FIB_CONTEXT_FLAG_TIMED_OUT;
 				cmd->SCp.phase = AAC_OWNER_ERROR_HANDLER;
 			}
 		}
 	}
 
-	pr_err("%s: Host bus reset request. SCSI hang ?\n", AAC_DRIVERNAME);
+	pr_err("%s: Host adapter reset request. SCSI hang ?\n", AAC_DRIVERNAME);
 
 	/*
 	 * Check the health of the controller
@@ -1584,7 +1565,6 @@ static void __aac_shutdown(struct aac_dev * aac)
 				up(&fib->event_wait);
 		}
 		kthread_stop(aac->thread);
-		aac->thread = NULL;
 	}
 
 	aac_send_shutdown(aac);
@@ -1710,10 +1690,8 @@ static int aac_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	 *	Map in the registers from the adapter.
 	 */
 	aac->base_size = AAC_MIN_FOOTPRINT_SIZE;
-	if ((*aac_drivers[index].init)(aac)) {
-		error = -ENODEV;
+	if ((*aac_drivers[index].init)(aac))
 		goto out_unmap;
-	}
 
 	if (aac->sync_mode) {
 		if (aac_sync_mode)

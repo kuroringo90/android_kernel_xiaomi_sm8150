@@ -321,17 +321,6 @@ int hdmi_vendor_infoframe_init(struct hdmi_vendor_infoframe *frame)
 }
 EXPORT_SYMBOL(hdmi_vendor_infoframe_init);
 
-static int hdmi_vendor_infoframe_length(const struct hdmi_vendor_infoframe *frame)
-{
-	/* for side by side (half) we also need to provide 3D_Ext_Data */
-	if (frame->s3d_struct >= HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF)
-		return 6;
-	else if (frame->vic != 0 || frame->s3d_struct != HDMI_3D_STRUCTURE_INVALID)
-		return 5;
-	else
-		return 4;
-}
-
 /**
  * hdmi_vendor_infoframe_pack() - write a HDMI vendor infoframe to binary buffer
  * @frame: HDMI infoframe
@@ -352,11 +341,19 @@ ssize_t hdmi_vendor_infoframe_pack(struct hdmi_vendor_infoframe *frame,
 	u8 *ptr = buffer;
 	size_t length;
 
+	/* empty info frame */
+	if (frame->vic == 0 && frame->s3d_struct == HDMI_3D_STRUCTURE_INVALID)
+		return -EINVAL;
+
 	/* only one of those can be supplied */
 	if (frame->vic != 0 && frame->s3d_struct != HDMI_3D_STRUCTURE_INVALID)
 		return -EINVAL;
 
-	frame->length = hdmi_vendor_infoframe_length(frame);
+	/* for side by side (half) we also need to provide 3D_Ext_Data */
+	if (frame->s3d_struct >= HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF)
+		frame->length = 6;
+	else
+		frame->length = 5;
 
 	length = HDMI_INFOFRAME_HEADER_SIZE + frame->length;
 
@@ -375,16 +372,14 @@ ssize_t hdmi_vendor_infoframe_pack(struct hdmi_vendor_infoframe *frame,
 	ptr[5] = 0x0c;
 	ptr[6] = 0x00;
 
-	if (frame->s3d_struct != HDMI_3D_STRUCTURE_INVALID) {
+	if (frame->vic) {
+		ptr[7] = 0x1 << 5;	/* video format */
+		ptr[8] = frame->vic;
+	} else {
 		ptr[7] = 0x2 << 5;	/* video format */
 		ptr[8] = (frame->s3d_struct & 0xf) << 4;
 		if (frame->s3d_struct >= HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF)
 			ptr[9] = (frame->s3d_ext_data & 0xf) << 4;
-	} else if (frame->vic) {
-		ptr[7] = 0x1 << 5;	/* video format */
-		ptr[8] = frame->vic;
-	} else {
-		ptr[7] = 0x0 << 5;	/* video format */
 	}
 
 	hdmi_infoframe_set_checksum(buffer, length);
@@ -704,7 +699,7 @@ static void hdmi_avi_infoframe_log(const char *level,
 
 static const char *hdmi_spd_sdi_get_name(enum hdmi_spd_sdi sdi)
 {
-	if (sdi < 0 || sdi > HDMI_SPD_SDI_MAX)
+	if (sdi < 0 || sdi > 0xff)
 		return "Invalid";
 	switch (sdi) {
 	case HDMI_SPD_SDI_UNKNOWN:
@@ -735,9 +730,8 @@ static const char *hdmi_spd_sdi_get_name(enum hdmi_spd_sdi sdi)
 		return "HD DVD";
 	case HDMI_SPD_SDI_PMP:
 		return "PMP";
-	default:
-		return "Reserved";
 	}
+	return "Reserved";
 }
 
 /**
@@ -848,7 +842,7 @@ hdmi_audio_sample_frequency_get_name(enum hdmi_audio_sample_frequency freq)
 static const char *
 hdmi_audio_coding_type_ext_get_name(enum hdmi_audio_coding_type_ext ctx)
 {
-	if (ctx < 0 || ctx > HDMI_AUDIO_CODING_TYPE_EXT_MAX)
+	if (ctx < 0 || ctx > 0x1f)
 		return "Invalid";
 
 	switch (ctx) {
@@ -872,9 +866,8 @@ hdmi_audio_coding_type_ext_get_name(enum hdmi_audio_coding_type_ext ctx)
 		return "MPEG-4 HE AAC + MPEG Surround";
 	case HDMI_AUDIO_CODING_TYPE_EXT_MPEG4_AAC_LC_SURROUND:
 		return "MPEG-4 AAC LC + MPEG Surround";
-	default:
-		return "Reserved";
 	}
+	return "Reserved";
 }
 
 /**
@@ -1038,12 +1031,12 @@ static int hdmi_avi_infoframe_unpack(struct hdmi_avi_infoframe *frame,
 	if (ptr[0] & 0x10)
 		frame->active_aspect = ptr[1] & 0xf;
 	if (ptr[0] & 0x8) {
-		frame->top_bar = (ptr[6] << 8) | ptr[5];
-		frame->bottom_bar = (ptr[8] << 8) | ptr[7];
+		frame->top_bar = (ptr[5] << 8) + ptr[6];
+		frame->bottom_bar = (ptr[7] << 8) + ptr[8];
 	}
 	if (ptr[0] & 0x4) {
-		frame->left_bar = (ptr[10] << 8) | ptr[9];
-		frame->right_bar = (ptr[12] << 8) | ptr[11];
+		frame->left_bar = (ptr[9] << 8) + ptr[10];
+		frame->right_bar = (ptr[11] << 8) + ptr[12];
 	}
 	frame->scan_mode = ptr[0] & 0x3;
 
@@ -1172,7 +1165,7 @@ hdmi_vendor_any_infoframe_unpack(union hdmi_vendor_any_infoframe *frame,
 
 	if (ptr[0] != HDMI_INFOFRAME_TYPE_VENDOR ||
 	    ptr[1] != 1 ||
-	    (ptr[2] != 4 && ptr[2] != 5 && ptr[2] != 6))
+	    (ptr[2] != 5 && ptr[2] != 6))
 		return -EINVAL;
 
 	length = ptr[2];
@@ -1200,22 +1193,16 @@ hdmi_vendor_any_infoframe_unpack(union hdmi_vendor_any_infoframe *frame,
 
 	hvf->length = length;
 
-	if (hdmi_video_format == 0x2) {
-		if (length != 5 && length != 6)
-			return -EINVAL;
+	if (hdmi_video_format == 0x1) {
+		hvf->vic = ptr[4];
+	} else if (hdmi_video_format == 0x2) {
 		hvf->s3d_struct = ptr[4] >> 4;
 		if (hvf->s3d_struct >= HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF) {
-			if (length != 6)
+			if (length == 6)
+				hvf->s3d_ext_data = ptr[5] >> 4;
+			else
 				return -EINVAL;
-			hvf->s3d_ext_data = ptr[5] >> 4;
 		}
-	} else if (hdmi_video_format == 0x1) {
-		if (length != 5)
-			return -EINVAL;
-		hvf->vic = ptr[4];
-	} else {
-		if (length != 4)
-			return -EINVAL;
 	}
 
 	return 0;

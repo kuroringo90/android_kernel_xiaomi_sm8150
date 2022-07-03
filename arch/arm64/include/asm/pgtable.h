@@ -19,7 +19,6 @@
 #include <asm/bug.h>
 #include <asm/proc-fns.h>
 
-#include <asm/bug.h>
 #include <asm/memory.h>
 #include <asm/pgtable-hwdef.h>
 #include <asm/pgtable-prot.h>
@@ -91,8 +90,14 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 #define pte_dirty(pte)		(pte_sw_dirty(pte) || pte_hw_dirty(pte))
 
 #define pte_valid(pte)		(!!(pte_val(pte) & PTE_VALID))
+/*
+ * Execute-only user mappings do not have the PTE_USER bit set. All valid
+ * kernel mappings have the PTE_UXN bit set.
+ */
 #define pte_valid_not_user(pte) \
-	((pte_val(pte) & (PTE_VALID | PTE_USER)) == PTE_VALID)
+	((pte_val(pte) & (PTE_VALID | PTE_USER | PTE_UXN)) == (PTE_VALID | PTE_UXN))
+#define pte_valid_young(pte) \
+	((pte_val(pte) & (PTE_VALID | PTE_AF)) == (PTE_VALID | PTE_AF))
 #define pte_valid_user(pte) \
 	((pte_val(pte) & (PTE_VALID | PTE_USER)) == (PTE_VALID | PTE_USER))
 
@@ -100,17 +105,14 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
  * Could the pte be present in the TLB? We must check mm_tlb_flush_pending
  * so that we don't erroneously return false for pages that have been
  * remapped as PROT_NONE but are yet to be flushed from the TLB.
- * Note that we can't make any assumptions based on the state of the access
- * flag, since ptep_clear_flush_young() elides a DSB when invalidating the
- * TLB.
  */
 #define pte_accessible(mm, pte)	\
-	(mm_tlb_flush_pending(mm) ? pte_present(pte) : pte_valid(pte))
+	(mm_tlb_flush_pending(mm) ? pte_present(pte) : pte_valid_young(pte))
 
 /*
  * p??_access_permitted() is true for valid user mappings (subject to the
- * write permission check). PROT_NONE mappings do not have the PTE_VALID bit
- * set.
+ * write permission check) other than user execute-only which do not have the
+ * PTE_USER bit set. PROT_NONE mappings do not have the PTE_VALID bit set.
  */
 #define pte_access_permitted(pte, write) \
 	(pte_valid_user(pte) && (!(write) || pte_write(pte)))
@@ -131,6 +133,13 @@ static inline pte_t set_pte_bit(pte_t pte, pgprot_t prot)
 	return pte;
 }
 
+static inline pte_t pte_wrprotect(pte_t pte)
+{
+	pte = clear_pte_bit(pte, __pgprot(PTE_WRITE));
+	pte = set_pte_bit(pte, __pgprot(PTE_RDONLY));
+	return pte;
+}
+
 static inline pte_t pte_mkwrite(pte_t pte)
 {
 	pte = set_pte_bit(pte, __pgprot(PTE_WRITE));
@@ -140,34 +149,12 @@ static inline pte_t pte_mkwrite(pte_t pte)
 
 static inline pte_t pte_mkclean(pte_t pte)
 {
-	pte = clear_pte_bit(pte, __pgprot(PTE_DIRTY));
-	pte = set_pte_bit(pte, __pgprot(PTE_RDONLY));
-
-	return pte;
+	return clear_pte_bit(pte, __pgprot(PTE_DIRTY));
 }
 
 static inline pte_t pte_mkdirty(pte_t pte)
 {
-	pte = set_pte_bit(pte, __pgprot(PTE_DIRTY));
-
-	if (pte_write(pte))
-		pte = clear_pte_bit(pte, __pgprot(PTE_RDONLY));
-
-	return pte;
-}
-
-static inline pte_t pte_wrprotect(pte_t pte)
-{
-	/*
-	 * If hardware-dirty (PTE_WRITE/DBM bit set and PTE_RDONLY
-	 * clear), set the PTE_DIRTY bit.
-	 */
-	if (pte_hw_dirty(pte))
-		pte = pte_mkdirty(pte);
-
-	pte = clear_pte_bit(pte, __pgprot(PTE_WRITE));
-	pte = set_pte_bit(pte, __pgprot(PTE_RDONLY));
-	return pte;
+	return set_pte_bit(pte, __pgprot(PTE_DIRTY));
 }
 
 static inline pte_t pte_mkold(pte_t pte)
@@ -208,34 +195,6 @@ static inline pmd_t pmd_mkcont(pmd_t pmd)
 
 static inline void set_pte(pte_t *ptep, pte_t pte)
 {
-#ifdef CONFIG_ARM64_STRICT_BREAK_BEFORE_MAKE
-	pteval_t old = pte_val(*ptep);
-	pteval_t new = pte_val(pte);
-
-	/* Only problematic if valid -> valid */
-	if (!(old & new & PTE_VALID))
-		goto pte_ok;
-
-	/* Changing attributes should go via an invalid entry */
-	if (WARN_ON((old & PTE_ATTRINDX_MASK) != (new & PTE_ATTRINDX_MASK)))
-		goto pte_bad;
-
-	/* Change of OA is only an issue if one mapping is writable */
-	if (!(old & new & PTE_RDONLY) &&
-	    WARN_ON(pte_pfn(*ptep) != pte_pfn(pte)))
-		goto pte_bad;
-
-	goto pte_ok;
-
-pte_bad:
-	*ptep = __pte(0);
-	dsb(ishst);
-	asm("tlbi	vmalle1is");
-	dsb(ish);
-	isb();
-pte_ok:
-#endif
-
 	*ptep = pte;
 
 	/*
@@ -289,6 +248,23 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 	}
 
 	set_pte(ptep, pte);
+}
+
+#define __HAVE_ARCH_PTE_SAME
+static inline int pte_same(pte_t pte_a, pte_t pte_b)
+{
+	pteval_t lhs, rhs;
+
+	lhs = pte_val(pte_a);
+	rhs = pte_val(pte_b);
+
+	if (pte_present(pte_a))
+		lhs &= ~PTE_RDONLY;
+
+	if (pte_present(pte_b))
+		rhs &= ~PTE_RDONLY;
+
+	return (lhs == rhs);
 }
 
 /*
@@ -380,7 +356,6 @@ static inline int pmd_protnone(pmd_t pmd)
 
 #define pud_write(pud)		pte_write(pud_pte(pud))
 #define pud_pfn(pud)		(((pud_val(pud) & PUD_MASK) & PHYS_MASK) >> PAGE_SHIFT)
-#define pfn_pud(pfn,prot)	(__pud(((phys_addr_t)(pfn) << PAGE_SHIFT) | pgprot_val(prot)))
 
 #define set_pmd_at(mm, addr, pmdp, pmd)	set_pte_at(mm, addr, (pte_t *)pmdp, pmd_pte(pmd))
 
@@ -411,8 +386,8 @@ extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 				 PMD_TYPE_SECT)
 
 #if defined(CONFIG_ARM64_64K_PAGES) || CONFIG_PGTABLE_LEVELS < 3
-static inline bool pud_sect(pud_t pud) { return false; }
-static inline bool pud_table(pud_t pud) { return true; }
+#define pud_sect(pud)		(0)
+#define pud_table(pud)		(1)
 #else
 #define pud_sect(pud)		((pud_val(pud) & PUD_TYPE_MASK) == \
 				 PUD_TYPE_SECT)
@@ -437,13 +412,6 @@ static inline phys_addr_t pmd_page_paddr(pmd_t pmd)
 	return pmd_val(pmd) & PHYS_MASK & (s32)PAGE_MASK;
 }
 
-static inline unsigned long pmd_page_vaddr(pmd_t pmd)
-{
-	return (unsigned long) __va(pmd_page_paddr(pmd));
-}
-
-static inline void pte_unmap(pte_t *pte) { }
-
 /* Find an entry in the third-level page table. */
 #define pte_index(addr)		(((addr) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
 
@@ -452,6 +420,7 @@ static inline void pte_unmap(pte_t *pte) { }
 
 #define pte_offset_map(dir,addr)	pte_offset_kernel((dir), (addr))
 #define pte_offset_map_nested(dir,addr)	pte_offset_kernel((dir), (addr))
+#define pte_unmap(pte)			do { } while (0)
 #define pte_unmap_nested(pte)		do { } while (0)
 
 #define pte_set_fixmap(addr)		((pte_t *)set_fixmap_offset(FIX_PTE, addr))
@@ -492,11 +461,6 @@ static inline void pud_clear(pud_t *pudp)
 static inline phys_addr_t pud_page_paddr(pud_t pud)
 {
 	return pud_val(pud) & PHYS_MASK & (s32)PAGE_MASK;
-}
-
-static inline unsigned long pud_page_vaddr(pud_t pud)
-{
-	return (unsigned long) __va(pud_page_paddr(pud));
 }
 
 /* Find an entry in the second-level page table. */
@@ -549,11 +513,6 @@ static inline void pgd_clear(pgd_t *pgdp)
 static inline phys_addr_t pgd_page_paddr(pgd_t pgd)
 {
 	return pgd_val(pgd) & PHYS_MASK & (s32)PAGE_MASK;
-}
-
-static inline unsigned long pgd_page_vaddr(pgd_t pgd)
-{
-	return (unsigned long) __va(pgd_page_paddr(pgd));
 }
 
 /* Find an entry in the frst-level page table. */
@@ -683,14 +642,25 @@ static inline pmd_t pmdp_huge_get_and_clear(struct mm_struct *mm,
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
 /*
- * ptep_set_wrprotect - mark read-only while trasferring potential hardware
- * dirty status (PTE_DBM && !PTE_RDONLY) to the software PTE_DIRTY bit.
+ * ptep_set_wrprotect - mark read-only while preserving the hardware update of
+ * the Access Flag.
  */
 #define __HAVE_ARCH_PTEP_SET_WRPROTECT
 static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long address, pte_t *ptep)
 {
 	pte_t old_pte, pte;
 
+	/*
+	 * ptep_set_wrprotect() is only called on CoW mappings which are
+	 * private (!VM_SHARED) with the pte either read-only (!PTE_WRITE &&
+	 * PTE_RDONLY) or writable and software-dirty (PTE_WRITE &&
+	 * !PTE_RDONLY && PTE_DIRTY); see is_cow_mapping() and
+	 * protection_map[]. There is no race with the hardware update of the
+	 * dirty state: clearing of PTE_RDONLY when PTE_WRITE (a.k.a. PTE_DBM)
+	 * is set.
+	 */
+	VM_WARN_ONCE(pte_write(*ptep) && !pte_dirty(*ptep),
+		     "%s: potential race with hardware DBM", __func__);
 	pte = READ_ONCE(*ptep);
 	do {
 		old_pte = pte;
@@ -711,7 +681,6 @@ static inline void pmdp_set_wrprotect(struct mm_struct *mm,
 
 extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 extern pgd_t idmap_pg_dir[PTRS_PER_PGD];
-extern pgd_t tramp_pg_dir[PTRS_PER_PGD];
 
 /*
  * Encode and decode a swap entry:

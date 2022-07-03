@@ -11,7 +11,6 @@
 #include <linux/types.h>
 #include <linux/bug.h>
 #include <linux/restart_block.h>
-#include <linux/errno.h>
 
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 /*
@@ -40,23 +39,16 @@ enum {
 
 #ifdef __KERNEL__
 
-#ifndef arch_set_restart_data
-#define arch_set_restart_data(restart) do { } while (0)
-#endif
-
-static inline long set_restart_fn(struct restart_block *restart,
-					long (*fn)(struct restart_block *))
-{
-	restart->fn = fn;
-	arch_set_restart_data(restart);
-	return -ERESTART_RESTARTBLOCK;
-}
-
 #ifndef THREAD_ALIGN
 #define THREAD_ALIGN	THREAD_SIZE
 #endif
 
-#define THREADINFO_GFP		(GFP_KERNEL_ACCOUNT | __GFP_ZERO)
+#if IS_ENABLED(CONFIG_DEBUG_STACK_USAGE) || IS_ENABLED(CONFIG_DEBUG_KMEMLEAK)
+# define THREADINFO_GFP		(GFP_KERNEL_ACCOUNT | __GFP_NOTRACK | \
+				 __GFP_ZERO)
+#else
+# define THREADINFO_GFP		(GFP_KERNEL_ACCOUNT | __GFP_NOTRACK)
+#endif
 
 /*
  * flag set/clear/test wrappers
@@ -71,15 +63,6 @@ static inline void set_ti_thread_flag(struct thread_info *ti, int flag)
 static inline void clear_ti_thread_flag(struct thread_info *ti, int flag)
 {
 	clear_bit(flag, (unsigned long *)&ti->flags);
-}
-
-static inline void update_ti_thread_flag(struct thread_info *ti, int flag,
-					 bool value)
-{
-	if (value)
-		set_ti_thread_flag(ti, flag);
-	else
-		clear_ti_thread_flag(ti, flag);
 }
 
 static inline int test_and_set_ti_thread_flag(struct thread_info *ti, int flag)
@@ -101,8 +84,6 @@ static inline int test_ti_thread_flag(struct thread_info *ti, int flag)
 	set_ti_thread_flag(current_thread_info(), flag)
 #define clear_thread_flag(flag) \
 	clear_ti_thread_flag(current_thread_info(), flag)
-#define update_thread_flag(flag, value) \
-	update_ti_thread_flag(current_thread_info(), flag, value)
 #define test_and_set_thread_flag(flag) \
 	test_and_set_ti_thread_flag(current_thread_info(), flag)
 #define test_and_clear_thread_flag(flag) \

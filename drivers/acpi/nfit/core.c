@@ -208,41 +208,10 @@ static int xlat_status(struct nvdimm *nvdimm, void *buf, unsigned int cmd,
 	return xlat_nvdimm_status(buf, cmd, status);
 }
 
-static int cmd_to_func(struct nfit_mem *nfit_mem, unsigned int cmd,
-		struct nd_cmd_pkg *call_pkg)
-{
-	if (call_pkg) {
-		int i;
-
-		if (nfit_mem && nfit_mem->family != call_pkg->nd_family)
-			return -ENOTTY;
-
-		for (i = 0; i < ARRAY_SIZE(call_pkg->nd_reserved2); i++)
-			if (call_pkg->nd_reserved2[i])
-				return -EINVAL;
-		return call_pkg->nd_command;
-	}
-
-	/* In the !call_pkg case, bus commands == bus functions */
-	if (!nfit_mem)
-		return cmd;
-
-	/* Linux ND commands == NVDIMM_FAMILY_INTEL function numbers */
-	if (nfit_mem->family == NVDIMM_FAMILY_INTEL)
-		return cmd;
-
-	/*
-	 * Force function number validation to fail since 0 is never
-	 * published as a valid function in dsm_mask.
-	 */
-	return 0;
-}
-
 int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
 		unsigned int cmd, void *buf, unsigned int buf_len, int *cmd_rc)
 {
 	struct acpi_nfit_desc *acpi_desc = to_acpi_nfit_desc(nd_desc);
-	struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 	union acpi_object in_obj, in_buf, *out_obj;
 	const struct nd_cmd_desc *desc = NULL;
 	struct device *dev = acpi_desc->dev;
@@ -251,22 +220,27 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
 	unsigned long cmd_mask, dsm_mask;
 	u32 offset, fw_status = 0;
 	acpi_handle handle;
+	unsigned int func;
 	const guid_t *guid;
-	int func, rc, i;
+	int rc, i;
 
-	if (cmd_rc)
-		*cmd_rc = -EINVAL;
-
-	if (cmd == ND_CMD_CALL)
+	func = cmd;
+	if (cmd == ND_CMD_CALL) {
 		call_pkg = buf;
-	func = cmd_to_func(nfit_mem, cmd, call_pkg);
-	if (func < 0)
-		return func;
+		func = call_pkg->nd_command;
+
+		for (i = 0; i < ARRAY_SIZE(call_pkg->nd_reserved2); i++)
+			if (call_pkg->nd_reserved2[i])
+				return -EINVAL;
+	}
 
 	if (nvdimm) {
+		struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 		struct acpi_device *adev = nfit_mem->adev;
 
 		if (!adev)
+			return -ENOTTY;
+		if (call_pkg && nfit_mem->family != call_pkg->nd_family)
 			return -ENOTTY;
 
 		dimm_name = nvdimm_name(nvdimm);
@@ -281,7 +255,9 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
 
 		cmd_name = nvdimm_bus_cmd_name(cmd);
 		cmd_mask = nd_desc->cmd_mask;
-		dsm_mask = nd_desc->bus_dsm_mask;
+		dsm_mask = cmd_mask;
+		if (cmd == ND_CMD_CALL)
+			dsm_mask = nd_desc->bus_dsm_mask;
 		desc = nd_cmd_bus_desc(cmd);
 		guid = to_nfit_uuid(NFIT_DEV_BUS);
 		handle = adev->handle;
@@ -291,13 +267,7 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
 	if (!desc || (cmd && (desc->out_num + desc->in_num == 0)))
 		return -ENOTTY;
 
-	/*
-	 * Check for a valid command.  For ND_CMD_CALL, we also have to
-	 * make sure that the DSM function is supported.
-	 */
-	if (cmd == ND_CMD_CALL && !test_bit(func, &dsm_mask))
-		return -ENOTTY;
-	else if (!test_bit(cmd, &cmd_mask))
+	if (!test_bit(cmd, &cmd_mask) || !test_bit(func, &dsm_mask))
 		return -ENOTTY;
 
 	in_obj.type = ACPI_TYPE_PACKAGE;
@@ -331,13 +301,6 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
 		return -EINVAL;
 	}
 
-	if (out_obj->type != ACPI_TYPE_BUFFER) {
-		dev_dbg(dev, "%s unexpected output object type cmd: %s type: %d\n",
-				dimm_name, cmd_name, out_obj->type);
-		rc = -EINVAL;
-		goto out;
-	}
-
 	if (call_pkg) {
 		call_pkg->nd_fw_size = out_obj->buffer.length;
 		memcpy(call_pkg->nd_payload + call_pkg->nd_size_in,
@@ -351,9 +314,14 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
 		 * If we return an error (like elsewhere) then caller wouldn't
 		 * be able to rely upon data returned to make calculation.
 		 */
-		if (cmd_rc)
-			*cmd_rc = 0;
 		return 0;
+	}
+
+	if (out_obj->package.type != ACPI_TYPE_BUFFER) {
+		dev_dbg(dev, "%s:%s unexpected output object type cmd: %s type: %d\n",
+				__func__, dimm_name, cmd_name, out_obj->type);
+		rc = -EINVAL;
+		goto out;
 	}
 
 	dev_dbg(dev, "%s:%s cmd: %s output length: %d\n", __func__, dimm_name,
@@ -1054,11 +1022,8 @@ static ssize_t scrub_show(struct device *dev,
 	if (nd_desc) {
 		struct acpi_nfit_desc *acpi_desc = to_acpi_desc(nd_desc);
 
-		mutex_lock(&acpi_desc->init_mutex);
 		rc = sprintf(buf, "%d%s", acpi_desc->scrub_count,
-				work_busy(&acpi_desc->work)
-				&& !acpi_desc->cancel ? "+\n" : "\n");
-		mutex_unlock(&acpi_desc->init_mutex);
+				(work_busy(&acpi_desc->work)) ? "+\n" : "\n");
 	}
 	device_unlock(dev);
 	return rc;
@@ -1273,7 +1238,7 @@ static ssize_t format1_show(struct device *dev,
 					le16_to_cpu(nfit_dcr->dcr->code));
 			break;
 		}
-		if (rc != -ENXIO)
+		if (rc != ENXIO)
 			break;
 	}
 	mutex_unlock(&acpi_desc->init_mutex);
@@ -1492,11 +1457,6 @@ static int acpi_nfit_add_dimm(struct acpi_nfit_desc *acpi_desc,
 				dev_name(&adev_dimm->dev));
 		return -ENXIO;
 	}
-	/*
-	 * Record nfit_mem for the notification path to track back to
-	 * the nfit sysfs attributes for this dimm device object.
-	 */
-	dev_set_drvdata(&adev_dimm->dev, nfit_mem);
 
 	/*
 	 * Until standardization materializes we need to consider 4
@@ -1531,13 +1491,6 @@ static int acpi_nfit_add_dimm(struct acpi_nfit_desc *acpi_desc,
 		return 0;
 	}
 
-	/*
-	 * Function 0 is the command interrogation function, don't
-	 * export it to potential userspace use, and enable it to be
-	 * used as an error value in acpi_nfit_ctl().
-	 */
-	dsm_mask &= ~1UL;
-
 	guid = to_nfit_uuid(nfit_mem->family);
 	for_each_set_bit(i, &dsm_mask, BITS_PER_LONG)
 		if (acpi_check_dsm(adev_dimm->handle, guid, 1, 1ULL << i))
@@ -1563,11 +1516,9 @@ static void shutdown_dimm_notify(void *data)
 			sysfs_put(nfit_mem->flags_attr);
 			nfit_mem->flags_attr = NULL;
 		}
-		if (adev_dimm) {
+		if (adev_dimm)
 			acpi_remove_notify_handler(adev_dimm->handle,
 					ACPI_DEVICE_NOTIFY, acpi_nvdimm_notify);
-			dev_set_drvdata(&adev_dimm->dev, NULL);
-		}
 	}
 	mutex_unlock(&acpi_desc->init_mutex);
 }
@@ -1660,9 +1611,6 @@ static int acpi_nfit_register_dimms(struct acpi_nfit_desc *acpi_desc)
 		struct kernfs_node *nfit_kernfs;
 
 		nvdimm = nfit_mem->nvdimm;
-		if (!nvdimm)
-			continue;
-
 		nfit_kernfs = sysfs_get_dirent(nvdimm_kobj(nvdimm)->sd, "nfit");
 		if (nfit_kernfs)
 			nfit_mem->flags_attr = sysfs_get_dirent(nfit_kernfs,
@@ -1982,7 +1930,7 @@ static void write_blk_ctl(struct nfit_blk *nfit_blk, unsigned int bw,
 		offset = to_interleave_offset(offset, mmio);
 
 	writeq(cmd, mmio->addr.base + offset);
-	nvdimm_flush(nfit_blk->nd_region, NULL);
+	nvdimm_flush(nfit_blk->nd_region);
 
 	if (nfit_blk->dimm_flags & NFIT_BLK_DCR_LATCH)
 		readq(mmio->addr.base + offset);
@@ -2031,7 +1979,7 @@ static int acpi_nfit_blk_single_io(struct nfit_blk *nfit_blk,
 	}
 
 	if (rw)
-		nvdimm_flush(nfit_blk->nd_region, NULL);
+		nvdimm_flush(nfit_blk->nd_region);
 
 	rc = read_blk_stat(nfit_blk, lane) ? -EIO : 0;
 	return rc;
@@ -2355,7 +2303,7 @@ static int acpi_nfit_init_mapping(struct acpi_nfit_desc *acpi_desc,
 	struct acpi_nfit_system_address *spa = nfit_spa->spa;
 	struct nd_blk_region_desc *ndbr_desc;
 	struct nfit_mem *nfit_mem;
-	int rc;
+	int blk_valid = 0, rc;
 
 	if (!nvdimm) {
 		dev_err(acpi_desc->dev, "spa%d dimm: %#x not found\n",
@@ -2375,14 +2323,15 @@ static int acpi_nfit_init_mapping(struct acpi_nfit_desc *acpi_desc,
 		if (!nfit_mem || !nfit_mem->bdw) {
 			dev_dbg(acpi_desc->dev, "spa%d %s missing bdw\n",
 					spa->range_index, nvdimm_name(nvdimm));
-			break;
+		} else {
+			mapping->size = nfit_mem->bdw->capacity;
+			mapping->start = nfit_mem->bdw->start_address;
+			ndr_desc->num_lanes = nfit_mem->bdw->windows;
+			blk_valid = 1;
 		}
 
-		mapping->size = nfit_mem->bdw->capacity;
-		mapping->start = nfit_mem->bdw->start_address;
-		ndr_desc->num_lanes = nfit_mem->bdw->windows;
 		ndr_desc->mapping = mapping;
-		ndr_desc->num_mappings = 1;
+		ndr_desc->num_mappings = blk_valid;
 		ndbr_desc = to_blk_region_desc(ndr_desc);
 		ndbr_desc->enable = acpi_nfit_blk_region_enable;
 		ndbr_desc->do_io = acpi_desc->blk_do_io;
@@ -2454,9 +2403,6 @@ static int acpi_nfit_register_region(struct acpi_nfit_desc *acpi_desc,
 		struct acpi_nfit_memory_map *memdev = nfit_memdev->memdev;
 		struct nd_mapping_desc *mapping;
 
-		/* range index 0 == unmapped in SPA or invalid-SPA */
-		if (memdev->range_index == 0 || spa->range_index == 0)
-			continue;
 		if (memdev->range_index != spa->range_index)
 			continue;
 		if (count >= ND_MAX_MAPPINGS) {
@@ -2792,21 +2738,15 @@ static void acpi_nfit_scrub(struct work_struct *work)
 static int acpi_nfit_register_regions(struct acpi_nfit_desc *acpi_desc)
 {
 	struct nfit_spa *nfit_spa;
+	int rc;
 
-	list_for_each_entry(nfit_spa, &acpi_desc->spas, list) {
-		int rc, type = nfit_spa_type(nfit_spa->spa);
-
-		/* PMEM and VMEM will be registered by the ARS workqueue */
-		if (type == NFIT_SPA_PM || type == NFIT_SPA_VOLATILE)
-			continue;
-		/* BLK apertures belong to BLK region registration below */
-		if (type == NFIT_SPA_BDW)
-			continue;
-		/* BLK regions don't need to wait for ARS results */
-		rc = acpi_nfit_register_region(acpi_desc, nfit_spa);
-		if (rc)
-			return rc;
-	}
+	list_for_each_entry(nfit_spa, &acpi_desc->spas, list)
+		if (nfit_spa_type(nfit_spa->spa) == NFIT_SPA_DCR) {
+			/* BLK regions don't need to wait for ars results */
+			rc = acpi_nfit_register_region(acpi_desc, nfit_spa);
+			if (rc)
+				return rc;
+		}
 
 	acpi_desc->ars_start_flags = 0;
 	if (!acpi_desc->cancel)

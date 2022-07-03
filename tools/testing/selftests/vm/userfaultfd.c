@@ -60,7 +60,6 @@
 #include <signal.h>
 #include <poll.h>
 #include <string.h>
-#include <linux/mman.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/ioctl.h>
@@ -69,8 +68,6 @@
 #include <linux/userfaultfd.h>
 #include <setjmp.h>
 #include <stdbool.h>
-
-#include "../kselftest.h"
 
 #ifdef __NR_userfaultfd
 
@@ -130,10 +127,8 @@ static int anon_release_pages(char *rel_area)
 
 static void anon_allocate_area(void **alloc_area)
 {
-	*alloc_area = mmap(NULL, nr_pages * page_size, PROT_READ | PROT_WRITE,
-			   MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-	if (*alloc_area == MAP_FAILED) {
-		fprintf(stderr, "mmap of anonymous memory failed");
+	if (posix_memalign(alloc_area, page_size, nr_pages * page_size)) {
+		fprintf(stderr, "out of memory\n");
 		*alloc_area = NULL;
 	}
 }
@@ -1327,7 +1322,7 @@ int main(int argc, char **argv)
 int main(void)
 {
 	printf("skip: Skipping userfaultfd test (missing __NR_userfaultfd)\n");
-	return KSFT_SKIP;
+	return 0;
 }
 
 #endif /* __NR_userfaultfd */

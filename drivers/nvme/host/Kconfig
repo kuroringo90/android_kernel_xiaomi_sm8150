@@ -18,7 +18,7 @@ config NVME_FABRICS
 
 config NVME_RDMA
 	tristate "NVM Express over Fabrics RDMA host driver"
-	depends on INFINIBAND && INFINIBAND_ADDR_TRANS && BLOCK
+	depends on INFINIBAND && BLOCK
 	select NVME_CORE
 	select NVME_FABRICS
 	select SG_POOL
@@ -48,10 +48,3 @@ config NVME_FC
 	  from https://github.com/linux-nvme/nvme-cli.
 
 	  If unsure, say N.
-
-config NVME_QCOM
-        bool "QTI MSM/MDM target support"
-        depends on BLK_DEV_NVME
-        depends on ARCH_QCOM
-        help
-          Enable support for integration with Qualcomm Technologies, Inc. chipsets.

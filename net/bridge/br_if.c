@@ -485,7 +485,7 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	struct net_bridge_port *p;
 	int err = 0;
 	unsigned br_hr, dev_hr;
-	bool changed_addr, fdb_synced = false;
+	bool changed_addr;
 
 	/* Don't allow bridging non-ethernet like devices, or DSA-enabled
 	 * master network devices since the bridge layer rx_handler prevents
@@ -503,8 +503,8 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	if (dev->netdev_ops->ndo_start_xmit == br_dev_xmit)
 		return -ELOOP;
 
-	/* Device has master upper dev */
-	if (netdev_master_upper_dev_get(dev))
+	/* Device is already being bridged */
+	if (br_port_exists(dev))
 		return -EBUSY;
 
 	/* No bridging devices that dislike that (e.g. wireless) */
@@ -518,16 +518,13 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	call_netdevice_notifiers(NETDEV_JOIN, dev);
 
 	err = dev_set_allmulti(dev, 1);
-	if (err) {
-		br_multicast_del_port(p);
-		kfree(p);	/* kobject not yet init'd, manually free */
-		goto err1;
-	}
+	if (err)
+		goto put_back;
 
 	err = kobject_init_and_add(&p->kobj, &brport_ktype, &(dev->dev.kobj),
 				   SYSFS_BRIDGE_PORT_ATTR);
 	if (err)
-		goto err2;
+		goto err1;
 
 	err = br_sysfs_addif(p);
 	if (err)
@@ -556,19 +553,6 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	list_add_rcu(&p->list, &br->port_list);
 
 	nbp_update_port_count(br);
-	if (!br_promisc_port(p) && (p->dev->priv_flags & IFF_UNICAST_FLT)) {
-		/* When updating the port count we also update all ports'
-		 * promiscuous mode.
-		 * A port leaving promiscuous mode normally gets the bridge's
-		 * fdb synced to the unicast filter (if supported), however,
-		 * `br_port_clear_promisc` does not distinguish between
-		 * non-promiscuous ports and *new* ports, so we need to
-		 * sync explicitly here.
-		 */
-		fdb_synced = br_fdb_sync_static(br, p) == 0;
-		if (!fdb_synced)
-			netdev_err(dev, "failed to sync bridge static fdb addresses to this port\n");
-	}
 
 	netdev_update_features(br->dev);
 
@@ -609,8 +593,6 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	return 0;
 
 err7:
-	if (fdb_synced)
-		br_fdb_unsync_static(br, p);
 	list_del_rcu(&p->list);
 	br_fdb_delete_by_port(br, p, 0, 1);
 	nbp_update_port_count(br);
@@ -624,11 +606,13 @@ err4:
 err3:
 	sysfs_remove_link(br->ifobj, p->dev->name);
 err2:
-	br_multicast_del_port(p);
 	kobject_put(&p->kobj);
-	dev_set_allmulti(dev, -1);
+	p = NULL; /* kobject_put frees */
 err1:
+	dev_set_allmulti(dev, -1);
+put_back:
 	dev_put(dev);
+	kfree(p);
 	return err;
 }
 
@@ -670,34 +654,3 @@ void br_port_flags_change(struct net_bridge_port *p, unsigned long mask)
 	if (mask & BR_AUTO_MASK)
 		nbp_update_port_count(br);
 }
-
-/* br_port_dev_get()
- * Using the given addr, identify the port to which it is reachable,
- * returing a reference to the net device associated with that port.
- *
- * NOTE: Return NULL if given dev is not a bridge or
- *       the mac has no associated port
- */
-struct net_device *br_port_dev_get(struct net_device *dev, unsigned char *addr)
-{
-	struct net_bridge_fdb_entry *fdbe;
-	struct net_bridge *br;
-	struct net_device *netdev = NULL;
-
-	/* Is this a bridge? */
-	if (!(dev->priv_flags & IFF_EBRIDGE))
-		return NULL;
-
-	br = netdev_priv(dev);
-
-	/* Lookup the fdb entry and get reference to the port dev */
-	rcu_read_lock();
-	fdbe = br_fdb_find_rcu(br, addr, 0);
-	if (fdbe && fdbe->dst) {
-		netdev = fdbe->dst->dev; /* port device */
-		dev_hold(netdev);
-	}
-	rcu_read_unlock();
-	return netdev;
-}
-EXPORT_SYMBOL(br_port_dev_get);

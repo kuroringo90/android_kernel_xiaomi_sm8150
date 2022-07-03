@@ -147,7 +147,6 @@ static struct fpga_manager *fpga_region_get_manager(struct fpga_region *region)
 			mgr_node = of_parse_phandle(np, "fpga-mgr", 0);
 			if (mgr_node) {
 				mgr = of_fpga_mgr_get(mgr_node);
-				of_node_put(mgr_node);
 				of_node_put(np);
 				return mgr;
 			}
@@ -193,13 +192,10 @@ static int fpga_region_get_bridges(struct fpga_region *region,
 		parent_br = region_np->parent;
 
 	/* If overlay has a list of bridges, use it. */
-	br = of_parse_phandle(overlay, "fpga-bridges", 0);
-	if (br) {
-		of_node_put(br);
+	if (of_parse_phandle(overlay, "fpga-bridges", 0))
 		np = overlay;
-	} else {
+	else
 		np = region_np;
-	}
 
 	for (i = 0; ; i++) {
 		br = of_parse_phandle(np, "fpga-bridges", i);
@@ -207,15 +203,12 @@ static int fpga_region_get_bridges(struct fpga_region *region,
 			break;
 
 		/* If parent bridge is in list, skip it. */
-		if (br == parent_br) {
-			of_node_put(br);
+		if (br == parent_br)
 			continue;
-		}
 
 		/* If node is a bridge, get it and add to list */
 		ret = fpga_bridge_get_to_list(br, region->info,
 					      &region->bridge_list);
-		of_node_put(br);
 
 		/* If any of the bridges are in use, give up */
 		if (ret == -EBUSY) {

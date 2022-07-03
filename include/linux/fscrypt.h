@@ -36,7 +36,7 @@ struct fscrypt_name {
 	u32 hash;
 	u32 minor_hash;
 	struct fscrypt_str crypto_buf;
-	bool is_ciphertext_name;
+	bool is_nokey_name;
 };
 
 #define FSTR_INIT(n, l)		{ .name = n, .len = l }
@@ -66,14 +66,9 @@ struct fscrypt_operations {
 		struct super_block *sb);
 	bool (*empty_dir)(struct inode *inode);
 	unsigned int max_namelen;
-	bool (*is_encrypted)(struct inode *);
 	bool (*has_stable_inodes)(struct super_block *sb);
 	void (*get_ino_and_lblk_bits)(struct super_block *sb,
 				      int *ino_bits_ret, int *lblk_bits_ret);
-	bool (*inline_crypt_enabled)(struct super_block *sb);
-	int (*get_num_devices)(struct super_block *sb);
-	void (*get_devices)(struct super_block *sb,
-			    struct request_queue **devs);
 };
 
 static inline bool fscrypt_has_encryption_key(const struct inode *inode)
@@ -107,15 +102,15 @@ fscrypt_get_dummy_context(struct super_block *sb)
 }
 
 /*
- * When d_splice_alias() moves a directory's encrypted alias to its decrypted
- * alias as a result of the encryption key being added, DCACHE_ENCRYPTED_NAME
- * must be cleared.  Note that we don't have to support arbitrary moves of this
- * flag because fscrypt doesn't allow encrypted aliases to be the source or
- * target of a rename().
+ * When d_splice_alias() moves a directory's no-key alias to its plaintext alias
+ * as a result of the encryption key being added, DCACHE_NOKEY_NAME must be
+ * cleared.  Note that we don't have to support arbitrary moves of this flag
+ * because fscrypt doesn't allow no-key names to be the source or target of a
+ * rename().
  */
 static inline void fscrypt_handle_d_move(struct dentry *dentry)
 {
-	dentry->d_flags &= ~DCACHE_ENCRYPTED_NAME;
+	dentry->d_flags &= ~DCACHE_NOKEY_NAME;
 }
 
 /* crypto.c */
@@ -146,7 +141,6 @@ static inline struct page *fscrypt_pagecache_page(struct page *bounce_page)
 }
 
 void fscrypt_free_bounce_page(struct page *bounce_page);
-int fscrypt_d_revalidate(struct dentry *dentry, unsigned int flags);
 
 /* policy.c */
 int fscrypt_ioctl_set_policy(struct file *filp, const void __user *arg);
@@ -179,8 +173,6 @@ int fscrypt_ioctl_add_key(struct file *filp, void __user *arg);
 int fscrypt_ioctl_remove_key(struct file *filp, void __user *arg);
 int fscrypt_ioctl_remove_key_all_users(struct file *filp, void __user *arg);
 int fscrypt_ioctl_get_key_status(struct file *filp, void __user *arg);
-int fscrypt_register_key_removal_notifier(struct notifier_block *nb);
-int fscrypt_unregister_key_removal_notifier(struct notifier_block *nb);
 
 /* keysetup.c */
 int fscrypt_get_encryption_info(struct inode *inode);
@@ -207,6 +199,7 @@ int fscrypt_fname_disk_to_usr(const struct inode *inode,
 bool fscrypt_match_name(const struct fscrypt_name *fname,
 			const u8 *de_name, u32 de_name_len);
 u64 fscrypt_fname_siphash(const struct inode *dir, const struct qstr *name);
+int fscrypt_d_revalidate(struct dentry *dentry, unsigned int flags);
 
 /* bio.c */
 void fscrypt_decrypt_bio(struct bio *bio);
@@ -383,18 +376,6 @@ static inline int fscrypt_ioctl_get_key_status(struct file *filp,
 	return -EOPNOTSUPP;
 }
 
-static inline int fscrypt_register_key_removal_notifier(
-						struct notifier_block *nb)
-{
-	return 0;
-}
-
-static inline int fscrypt_unregister_key_removal_notifier(
-						struct notifier_block *nb)
-{
-	return 0;
-}
-
 /* keysetup.c */
 static inline int fscrypt_get_encryption_info(struct inode *inode)
 {
@@ -471,6 +452,12 @@ static inline u64 fscrypt_fname_siphash(const struct inode *dir,
 	return 0;
 }
 
+static inline int fscrypt_d_revalidate(struct dentry *dentry,
+				       unsigned int flags)
+{
+	return 1;
+}
+
 /* bio.c */
 static inline void fscrypt_decrypt_bio(struct bio *bio)
 {
@@ -545,93 +532,6 @@ static inline const char *fscrypt_get_symlink(struct inode *inode,
 	return ERR_PTR(-EOPNOTSUPP);
 }
 #endif	/* !CONFIG_FS_ENCRYPTION */
-
-/* inline_crypt.c */
-#ifdef CONFIG_FS_ENCRYPTION_INLINE_CRYPT
-extern bool fscrypt_inode_uses_inline_crypto(const struct inode *inode);
-
-extern bool fscrypt_inode_uses_fs_layer_crypto(const struct inode *inode);
-
-extern void fscrypt_set_bio_crypt_ctx(struct bio *bio,
-				      const struct inode *inode,
-				      u64 first_lblk, gfp_t gfp_mask);
-
-extern void fscrypt_set_bio_crypt_ctx_bh(struct bio *bio,
-					 const struct buffer_head *first_bh,
-					 gfp_t gfp_mask);
-
-extern bool fscrypt_mergeable_bio(struct bio *bio, const struct inode *inode,
-				  u64 next_lblk);
-
-extern bool fscrypt_mergeable_bio_bh(struct bio *bio,
-				     const struct buffer_head *next_bh);
-
-bool fscrypt_dio_supported(struct kiocb *iocb, struct iov_iter *iter);
-
-int fscrypt_limit_dio_pages(const struct inode *inode, loff_t pos,
-			    int nr_pages);
-
-#else /* CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
-static inline bool fscrypt_inode_uses_inline_crypto(const struct inode *inode)
-{
-	return false;
-}
-
-static inline bool fscrypt_inode_uses_fs_layer_crypto(const struct inode *inode)
-{
-	return IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode);
-}
-
-static inline void fscrypt_set_bio_crypt_ctx(struct bio *bio,
-					     const struct inode *inode,
-					     u64 first_lblk, gfp_t gfp_mask) { }
-
-static inline void fscrypt_set_bio_crypt_ctx_bh(
-					 struct bio *bio,
-					 const struct buffer_head *first_bh,
-					 gfp_t gfp_mask) { }
-
-static inline bool fscrypt_mergeable_bio(struct bio *bio,
-					 const struct inode *inode,
-					 u64 next_lblk)
-{
-	return true;
-}
-
-static inline bool fscrypt_mergeable_bio_bh(struct bio *bio,
-					    const struct buffer_head *next_bh)
-{
-	return true;
-}
-
-static inline bool fscrypt_dio_supported(struct kiocb *iocb,
-					 struct iov_iter *iter)
-{
-	const struct inode *inode = file_inode(iocb->ki_filp);
-
-	return !fscrypt_needs_contents_encryption(inode);
-}
-
-static inline int fscrypt_limit_dio_pages(const struct inode *inode, loff_t pos,
-					  int nr_pages)
-{
-	return nr_pages;
-}
-#endif /* !CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
-
-#if IS_ENABLED(CONFIG_FS_ENCRYPTION) && IS_ENABLED(CONFIG_DM_DEFAULT_KEY)
-static inline bool
-fscrypt_inode_should_skip_dm_default_key(const struct inode *inode)
-{
-	return IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode);
-}
-#else
-static inline bool
-fscrypt_inode_should_skip_dm_default_key(const struct inode *inode)
-{
-	return false;
-}
-#endif
 
 /**
  * fscrypt_require_key() - require an inode's encryption key
@@ -729,18 +629,19 @@ static inline int fscrypt_prepare_rename(struct inode *old_dir,
  * @fname: (output) the name to use to search the on-disk directory
  *
  * Prepare for ->lookup() in a directory which may be encrypted by determining
- * the name that will actually be used to search the directory on-disk.  Lookups
- * can be done with or without the directory's encryption key; without the key,
- * filenames are presented in encrypted form.  Therefore, we'll try to set up
- * the directory's encryption key, but even without it the lookup can continue.
+ * the name that will actually be used to search the directory on-disk.  If the
+ * directory's encryption key is available, then the lookup is assumed to be by
+ * plaintext name; otherwise, it is assumed to be by no-key name.
  *
- * After calling this function, a filesystem should ensure that it's dentry
- * operations contain fscrypt_d_revalidate if DCACHE_ENCRYPTED_NAME was set,
- * so that the dentry can be invalidated if the key is later added.
+ * This will set DCACHE_NOKEY_NAME on the dentry if the lookup is by no-key
+ * name.  In this case the filesystem must assign the dentry a dentry_operations
+ * which contains fscrypt_d_revalidate (or contains a d_revalidate method that
+ * calls fscrypt_d_revalidate), so that the dentry will be invalidated if the
+ * directory's encryption key is later added.
  *
- * Return: 0 on success; -ENOENT if key is unavailable but the filename isn't a
- * correctly formed encoded ciphertext name, so a negative dentry should be
- * created; or another -errno code.
+ * Return: 0 on success; -ENOENT if the directory's key is unavailable but the
+ * filename isn't a valid no-key name, so a negative dentry should be created;
+ * or another -errno code.
  */
 static inline int fscrypt_prepare_lookup(struct inode *dir,
 					 struct dentry *dentry,

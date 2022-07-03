@@ -389,8 +389,7 @@ xfs_bud_init(
 int
 xfs_bui_recover(
 	struct xfs_mount		*mp,
-	struct xfs_bui_log_item		*buip,
-	struct xfs_defer_ops		*dfops)
+	struct xfs_bui_log_item		*buip)
 {
 	int				error = 0;
 	unsigned int			bui_type;
@@ -405,7 +404,9 @@ xfs_bui_recover(
 	xfs_exntst_t			state;
 	struct xfs_trans		*tp;
 	struct xfs_inode		*ip = NULL;
+	struct xfs_defer_ops		dfops;
 	struct xfs_bmbt_irec		irec;
+	xfs_fsblock_t			firstfsb;
 
 	ASSERT(!test_bit(XFS_BUI_RECOVERED, &buip->bui_flags));
 
@@ -463,6 +464,7 @@ xfs_bui_recover(
 
 	if (VFS_I(ip)->i_nlink == 0)
 		xfs_iflags_set(ip, XFS_IRECOVERY);
+	xfs_defer_init(&dfops, &firstfsb);
 
 	/* Process deferred bmap item. */
 	state = (bmap->me_flags & XFS_BMAP_EXTENT_UNWRITTEN) ?
@@ -477,16 +479,16 @@ xfs_bui_recover(
 		break;
 	default:
 		error = -EFSCORRUPTED;
-		goto err_inode;
+		goto err_dfops;
 	}
 	xfs_trans_ijoin(tp, ip, 0);
 
 	count = bmap->me_len;
-	error = xfs_trans_log_finish_bmap_update(tp, budp, dfops, type,
+	error = xfs_trans_log_finish_bmap_update(tp, budp, &dfops, type,
 			ip, whichfork, bmap->me_startoff,
 			bmap->me_startblock, &count, state);
 	if (error)
-		goto err_inode;
+		goto err_dfops;
 
 	if (count > 0) {
 		ASSERT(type == XFS_BMAP_UNMAP);
@@ -494,10 +496,15 @@ xfs_bui_recover(
 		irec.br_blockcount = count;
 		irec.br_startoff = bmap->me_startoff;
 		irec.br_state = state;
-		error = xfs_bmap_unmap_extent(tp->t_mountp, dfops, ip, &irec);
+		error = xfs_bmap_unmap_extent(tp->t_mountp, &dfops, ip, &irec);
 		if (error)
-			goto err_inode;
+			goto err_dfops;
 	}
+
+	/* Finish transaction, free inodes. */
+	error = xfs_defer_finish(&tp, &dfops);
+	if (error)
+		goto err_dfops;
 
 	set_bit(XFS_BUI_RECOVERED, &buip->bui_flags);
 	error = xfs_trans_commit(tp);
@@ -506,6 +513,8 @@ xfs_bui_recover(
 
 	return error;
 
+err_dfops:
+	xfs_defer_cancel(&dfops);
 err_inode:
 	xfs_trans_cancel(tp);
 	if (ip) {

@@ -71,12 +71,8 @@ SYSCALL_DEFINE4(fadvise64_64, int, fd, loff_t, offset, loff_t, len, int, advice)
 		goto out;
 	}
 
-	/*
-	 * Careful about overflows. Len == 0 means "as much as possible".  Use
-	 * unsigned math because signed overflows are undefined and UBSan
-	 * complains.
-	 */
-	endbyte = (u64)offset + (u64)len;
+	/* Careful about overflows. Len == 0 means "as much as possible" */
+	endbyte = offset + len;
 	if (!len || endbyte < len)
 		endbyte = -1;
 	else
@@ -131,15 +127,7 @@ SYSCALL_DEFINE4(fadvise64_64, int, fd, loff_t, offset, loff_t, len, int, advice)
 		 */
 		start_index = (offset+(PAGE_SIZE-1)) >> PAGE_SHIFT;
 		end_index = (endbyte >> PAGE_SHIFT);
-		/*
-		 * The page at end_index will be inclusively discarded according
-		 * by invalidate_mapping_pages(), so subtracting 1 from
-		 * end_index means we will skip the last page.  But if endbyte
-		 * is page aligned or is at the end of file, we should not skip
-		 * that page - discarding the last page is safe enough.
-		 */
-		if ((endbyte & ~PAGE_MASK) != ~PAGE_MASK &&
-				endbyte != inode->i_size - 1) {
+		if ((endbyte & ~PAGE_MASK) != ~PAGE_MASK) {
 			/* First page is tricky as 0 - 1 = -1, but pgoff_t
 			 * is unsigned, so the end_index >= start_index
 			 * check below would be true and we'll discard the whole

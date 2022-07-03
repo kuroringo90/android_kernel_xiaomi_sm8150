@@ -429,13 +429,12 @@ config I2C_BCM_KONA
 	  If you do not need KONA I2C interface, say N.
 
 config I2C_BRCMSTB
-	tristate "BRCM Settop/DSL I2C controller"
-	depends on ARCH_BRCMSTB || BMIPS_GENERIC || ARCH_BCM_63XX || \
-		   COMPILE_TEST
+	tristate "BRCM Settop I2C controller"
+	depends on ARCH_BRCMSTB || BMIPS_GENERIC || COMPILE_TEST
 	default y
 	help
 	  If you say yes to this option, support will be included for the
-	  I2C interface on the Broadcom Settop/DSL SoCs.
+	  I2C interface on the Broadcom Settop SoCs.
 
 	  If you do not need I2C interface, say N.
 
@@ -459,7 +458,7 @@ config I2C_BLACKFIN_TWI_CLK_KHZ
 
 config I2C_CADENCE
 	tristate "Cadence I2C Controller"
-	depends on ARCH_ZYNQ || ARM64 || XTENSA || COMPILE_TEST
+	depends on ARCH_ZYNQ || ARM64 || XTENSA
 	help
 	  Say yes here to select Cadence I2C Host Controller. This controller is
 	  e.g. used by Xilinx Zynq.
@@ -836,23 +835,13 @@ config I2C_PXA_SLAVE
 
 config I2C_QUP
 	tristate "Qualcomm QUP based I2C controller"
-	depends on ARCH_QCOM || COMPILE_TEST
+	depends on ARCH_QCOM
 	help
 	  If you say yes to this option, support will be included for the
 	  built-in I2C interface on the Qualcomm SoCs.
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-qup.
-
-config I2C_QCOM_GENI
-        tristate "Qualcomm Technologies Inc.'s GENI based I2C controller"
-        depends on ARCH_QCOM
-        help
-          If you say yes to this option, support will be included for the
-          built-in I2C interface on the Qualcomm Technologies Inc.'s SoCs.
-
-          This driver can also be built as a module.  If so, the module
-          will be called i2c-qcom-geni.
 
 config I2C_RIIC
 	tristate "Renesas RIIC adapter"
@@ -1105,7 +1094,6 @@ config I2C_RCAR
 	depends on HAS_DMA
 	depends on ARCH_RENESAS || COMPILE_TEST
 	select I2C_SLAVE
-	select RESET_CONTROLLER if ARCH_RCAR_GEN3
 	help
 	  If you say yes to this option, support will be included for the
 	  R-Car I2C controller.
@@ -1329,17 +1317,6 @@ config I2C_OPAL
 	  This driver can also be built as a module. If so, the module will be
 	  called as i2c-opal.
 
-config I2C_MSM_V2
-        tristate "I2C_MSM_V2"
-        depends on ARCH_QCOM
-        help
-          If you say yes to this option, support will be included for the
-          built-in I2C interface and its DMA engine on the MSM family
-          processors.
-
-          This driver can also be built as a module.  If so, the module
-          will be called i2c-msm-v2.
-
 config I2C_ZX2967
 	tristate "ZTE ZX2967 I2C support"
 	depends on ARCH_ZX
@@ -1348,11 +1325,5 @@ config I2C_ZX2967
 	  Selecting this option will add ZX2967 I2C driver.
 	  This driver can also be built as a module. If so, the module will be
 	  called i2c-zx2967.
-
-config VIRTIO_I2C
-        tristate "VIRTIO_I2C"
-        depends on VIRTIO
-        help
-          If you say yes to this option, the virtio i2c will be supported.
 
 endmenu

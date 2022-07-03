@@ -529,11 +529,6 @@ static int meson_spicc_probe(struct platform_device *pdev)
 	writel_relaxed(0, spicc->base + SPICC_INTREG);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		ret = irq;
-		goto out_master;
-	}
-
 	ret = devm_request_irq(&pdev->dev, irq, meson_spicc_irq,
 			       0, NULL, spicc);
 	if (ret) {
@@ -579,15 +574,10 @@ static int meson_spicc_probe(struct platform_device *pdev)
 		master->max_speed_hz = rate >> 2;
 
 	ret = devm_spi_register_master(&pdev->dev, master);
-	if (ret) {
-		dev_err(&pdev->dev, "spi master registration failed\n");
-		goto out_clk;
-	}
+	if (!ret)
+		return 0;
 
-	return 0;
-
-out_clk:
-	clk_disable_unprepare(spicc->core);
+	dev_err(&pdev->dev, "spi master registration failed\n");
 
 out_master:
 	spi_master_put(master);
@@ -603,8 +593,6 @@ static int meson_spicc_remove(struct platform_device *pdev)
 	writel(0, spicc->base + SPICC_CONREG);
 
 	clk_disable_unprepare(spicc->core);
-
-	spi_master_put(spicc->master);
 
 	return 0;
 }

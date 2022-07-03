@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,8 +33,6 @@
 #include "sfpb.xml.h"
 #include "dsi_cfg.h"
 #include "msm_kms.h"
-
-#define DSI_RESET_TOGGLE_DELAY_MS 20
 
 static int dsi_get_version(const void __iomem *base, u32 *major, u32 *minor)
 {
@@ -442,7 +440,7 @@ static int dsi_bus_clk_enable(struct msm_dsi_host *msm_host)
 
 	return 0;
 err:
-	while (--i >= 0)
+	for (; i > 0; i--)
 		clk_disable_unprepare(msm_host->bus_clks[i]);
 
 	return ret;
@@ -742,7 +740,7 @@ static inline enum dsi_cmd_dst_format dsi_get_cmd_fmt(
 	switch (mipi_fmt) {
 	case MIPI_DSI_FMT_RGB888:	return CMD_DST_FORMAT_RGB888;
 	case MIPI_DSI_FMT_RGB666_PACKED:
-	case MIPI_DSI_FMT_RGB666:	return CMD_DST_FORMAT_RGB666;
+	case MIPI_DSI_FMT_RGB666:	return VID_DST_FORMAT_RGB666;
 	case MIPI_DSI_FMT_RGB565:	return CMD_DST_FORMAT_RGB565;
 	default:			return CMD_DST_FORMAT_RGB888;
 	}
@@ -908,7 +906,7 @@ static void dsi_sw_reset(struct msm_dsi_host *msm_host)
 	wmb(); /* clocks need to be enabled before reset */
 
 	dsi_write(msm_host, REG_DSI_RESET, 1);
-	msleep(DSI_RESET_TOGGLE_DELAY_MS); /* make sure reset happen */
+	wmb(); /* make sure reset happen */
 	dsi_write(msm_host, REG_DSI_RESET, 0);
 }
 
@@ -996,6 +994,7 @@ static int dsi_tx_buf_alloc(struct msm_dsi_host *msm_host, int size)
 
 		ret = msm_gem_get_iova(msm_host->tx_gem_obj,
 				priv->kms->aspace, &iova);
+		mutex_unlock(&dev->struct_mutex);
 		if (ret) {
 			pr_err("%s: failed to get iova, %d\n", __func__, ret);
 			return ret;
@@ -1239,10 +1238,10 @@ static int dsi_cmds2buf_tx(struct msm_dsi_host *msm_host,
 			dsi_get_bpp(msm_host->format) / 8;
 
 	len = dsi_cmd_dma_add(msm_host, msg);
-	if (len < 0) {
+	if (!len) {
 		pr_err("%s: failed to add cmd type = 0x%x\n",
 			__func__,  msg->type);
-		return len;
+		return -EINVAL;
 	}
 
 	/* for video mode, do not send cmds more than
@@ -1261,14 +1260,10 @@ static int dsi_cmds2buf_tx(struct msm_dsi_host *msm_host,
 	}
 
 	ret = dsi_cmd_dma_tx(msm_host, len);
-	if (ret < 0) {
-		pr_err("%s: cmd dma tx failed, type=0x%x, data0=0x%x, len=%d, ret=%d\n",
-			__func__, msg->type, (*(u8 *)(msg->tx_buf)), len, ret);
-		return ret;
-	} else if (ret < len) {
-		pr_err("%s: cmd dma tx failed, type=0x%x, data0=0x%x, ret=%d len=%d\n",
-			__func__, msg->type, (*(u8 *)(msg->tx_buf)), ret, len);
-		return -EIO;
+	if (ret < len) {
+		pr_err("%s: cmd dma tx failed, type=0x%x, data0=0x%x, len=%d\n",
+			__func__, msg->type, (*(u8 *)(msg->tx_buf)), len);
+		return -ECOMM;
 	}
 
 	return len;
@@ -1293,7 +1288,7 @@ static void dsi_sw_reset_restore(struct msm_dsi_host *msm_host)
 
 	/* dsi controller can only be reset while clocks are running */
 	dsi_write(msm_host, REG_DSI_RESET, 1);
-	msleep(DSI_RESET_TOGGLE_DELAY_MS); /* make sure reset happen */
+	wmb();	/* make sure reset happen */
 	dsi_write(msm_host, REG_DSI_RESET, 0);
 	wmb();	/* controller out of reset */
 	dsi_write(msm_host, REG_DSI_CTRL, data0);
@@ -1566,8 +1561,6 @@ static int dsi_host_parse_lane_data(struct msm_dsi_host *msm_host,
 	if (!prop) {
 		dev_dbg(dev,
 			"failed to find data lane mapping, using default\n");
-		/* Set the number of date lanes to 4 by default. */
-		msm_host->num_data_lanes = 4;
 		return 0;
 	}
 
@@ -1991,12 +1984,9 @@ int msm_dsi_host_cmd_rx(struct mipi_dsi_host *host,
 		}
 
 		ret = dsi_cmds2buf_tx(msm_host, msg);
-		if (ret < 0) {
+		if (ret < msg->tx_len) {
 			pr_err("%s: Read cmd Tx failed, %d\n", __func__, ret);
 			return ret;
-		} else if (ret < msg->tx_len) {
-			pr_err("%s: Read cmd Tx failed, too short: %d\n", __func__, ret);
-			return -ECOMM;
 		}
 
 		/*

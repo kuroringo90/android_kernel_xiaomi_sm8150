@@ -136,8 +136,8 @@ static inline int ovl_do_setxattr(struct dentry *dentry, const char *name,
 				  const void *value, size_t size, int flags)
 {
 	int err = vfs_setxattr(dentry, name, value, size, flags);
-	pr_debug("setxattr(%pd2, \"%s\", \"%*pE\", %zu, 0x%x) = %i\n",
-		 dentry, name, min((int)size, 48), value, size, flags, err);
+	pr_debug("setxattr(%pd2, \"%s\", \"%*s\", 0x%x) = %i\n",
+		 dentry, name, (int) size, (char *) value, flags, err);
 	return err;
 }
 
@@ -175,7 +175,7 @@ static inline int ovl_do_whiteout(struct inode *dir, struct dentry *dentry)
 
 static inline struct dentry *ovl_do_tmpfile(struct dentry *dentry, umode_t mode)
 {
-	struct dentry *ret = vfs_tmpfile(NULL, dentry, mode, 0);
+	struct dentry *ret = vfs_tmpfile(dentry, mode, 0);
 	int err = IS_ERR(ret) ? PTR_ERR(ret) : 0;
 
 	pr_debug("tmpfile(%pd2, 0%o) = %i\n", dentry, mode, err);
@@ -187,9 +187,6 @@ int ovl_want_write(struct dentry *dentry);
 void ovl_drop_write(struct dentry *dentry);
 struct dentry *ovl_workdir(struct dentry *dentry);
 const struct cred *ovl_override_creds(struct super_block *sb);
-void ovl_revert_creds(const struct cred *oldcred);
-ssize_t ovl_vfs_getxattr(struct dentry *dentry, const char *name, void *buf,
-			 size_t size);
 struct super_block *ovl_same_sb(struct super_block *sb);
 bool ovl_can_decode_fh(struct super_block *sb);
 struct dentry *ovl_indexdir(struct super_block *sb);
@@ -282,8 +279,6 @@ int ovl_xattr_set(struct dentry *dentry, struct inode *inode, const char *name,
 		  const void *value, size_t size, int flags);
 int ovl_xattr_get(struct dentry *dentry, struct inode *inode, const char *name,
 		  void *value, size_t size);
-int __ovl_xattr_get(struct dentry *dentry, struct inode *inode,
-		    const char *name, void *value, size_t size);
 ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size);
 struct posix_acl *ovl_get_acl(struct inode *inode, int type);
 int ovl_open_maybe_copy_up(struct dentry *dentry, unsigned int file_flags);

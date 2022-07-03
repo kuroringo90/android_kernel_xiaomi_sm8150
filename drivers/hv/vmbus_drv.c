@@ -297,16 +297,10 @@ static ssize_t out_intr_mask_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info outbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound,
-					  &outbound);
-	if (ret < 0)
-		return ret;
-
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound, &outbound);
 	return sprintf(buf, "%d\n", outbound.current_interrupt_mask);
 }
 static DEVICE_ATTR_RO(out_intr_mask);
@@ -316,15 +310,10 @@ static ssize_t out_read_index_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info outbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound,
-					  &outbound);
-	if (ret < 0)
-		return ret;
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound, &outbound);
 	return sprintf(buf, "%d\n", outbound.current_read_index);
 }
 static DEVICE_ATTR_RO(out_read_index);
@@ -335,15 +324,10 @@ static ssize_t out_write_index_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info outbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound,
-					  &outbound);
-	if (ret < 0)
-		return ret;
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound, &outbound);
 	return sprintf(buf, "%d\n", outbound.current_write_index);
 }
 static DEVICE_ATTR_RO(out_write_index);
@@ -354,15 +338,10 @@ static ssize_t out_read_bytes_avail_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info outbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound,
-					  &outbound);
-	if (ret < 0)
-		return ret;
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound, &outbound);
 	return sprintf(buf, "%d\n", outbound.bytes_avail_toread);
 }
 static DEVICE_ATTR_RO(out_read_bytes_avail);
@@ -373,15 +352,10 @@ static ssize_t out_write_bytes_avail_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info outbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound,
-					  &outbound);
-	if (ret < 0)
-		return ret;
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->outbound, &outbound);
 	return sprintf(buf, "%d\n", outbound.bytes_avail_towrite);
 }
 static DEVICE_ATTR_RO(out_write_bytes_avail);
@@ -391,15 +365,10 @@ static ssize_t in_intr_mask_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info inbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
-	if (ret < 0)
-		return ret;
-
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
 	return sprintf(buf, "%d\n", inbound.current_interrupt_mask);
 }
 static DEVICE_ATTR_RO(in_intr_mask);
@@ -409,15 +378,10 @@ static ssize_t in_read_index_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info inbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
-	if (ret < 0)
-		return ret;
-
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
 	return sprintf(buf, "%d\n", inbound.current_read_index);
 }
 static DEVICE_ATTR_RO(in_read_index);
@@ -427,15 +391,10 @@ static ssize_t in_write_index_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info inbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
-	if (ret < 0)
-		return ret;
-
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
 	return sprintf(buf, "%d\n", inbound.current_write_index);
 }
 static DEVICE_ATTR_RO(in_write_index);
@@ -446,15 +405,10 @@ static ssize_t in_read_bytes_avail_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info inbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
-	if (ret < 0)
-		return ret;
-
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
 	return sprintf(buf, "%d\n", inbound.bytes_avail_toread);
 }
 static DEVICE_ATTR_RO(in_read_bytes_avail);
@@ -465,15 +419,10 @@ static ssize_t in_write_bytes_avail_show(struct device *dev,
 {
 	struct hv_device *hv_dev = device_to_hv_device(dev);
 	struct hv_ring_buffer_debug_info inbound;
-	int ret;
 
 	if (!hv_dev->channel)
 		return -ENODEV;
-
-	ret = hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
-	if (ret < 0)
-		return ret;
-
+	hv_ringbuffer_get_debuginfo(&hv_dev->channel->inbound, &inbound);
 	return sprintf(buf, "%d\n", inbound.bytes_avail_towrite);
 }
 static DEVICE_ATTR_RO(in_write_bytes_avail);
@@ -890,10 +839,6 @@ void vmbus_on_msg_dpc(unsigned long data)
 	}
 
 	entry = &channel_message_table[hdr->msgtype];
-
-	if (!entry->message_handler)
-		goto msg_handled;
-
 	if (entry->handler_type	== VMHT_BLOCKING) {
 		ctx = kmalloc(sizeof(*ctx), GFP_ATOMIC);
 		if (ctx == NULL)
@@ -1064,7 +1009,7 @@ static void vmbus_isr(void)
 			tasklet_schedule(&hv_cpu->msg_dpc);
 	}
 
-	add_interrupt_randomness(HYPERVISOR_CALLBACK_VECTOR);
+	add_interrupt_randomness(HYPERVISOR_CALLBACK_VECTOR, 0);
 }
 
 
@@ -1589,7 +1534,7 @@ static int __init hv_acpi_init(void)
 {
 	int ret, t;
 
-	if (x86_hyper_type != X86_HYPER_MS_HYPERV)
+	if (x86_hyper != &x86_hyper_ms_hyperv)
 		return -ENODEV;
 
 	init_completion(&probe_event);

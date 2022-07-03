@@ -26,11 +26,6 @@
 #include <net/ip.h>
 #include "ar-internal.h"
 
-static void rxrpc_dummy_notify(struct sock *sk, struct rxrpc_call *call,
-			       unsigned long user_call_ID)
-{
-}
-
 /*
  * Preallocate a single service call, connection and peer and, if possible,
  * give them a user ID and attach the user's side of the ID to them.
@@ -99,7 +94,7 @@ static int rxrpc_service_prealloc_one(struct rxrpc_sock *rx,
 	/* Now it gets complicated, because calls get registered with the
 	 * socket here, particularly if a user ID is preassigned by the user.
 	 */
-	call = rxrpc_alloc_call(rx, gfp);
+	call = rxrpc_alloc_call(gfp);
 	if (!call)
 		return -ENOMEM;
 	call->flags |= (1 << RXRPC_CALL_IS_SERVICE);
@@ -120,9 +115,9 @@ static int rxrpc_service_prealloc_one(struct rxrpc_sock *rx,
 		while (*pp) {
 			parent = *pp;
 			xcall = rb_entry(parent, struct rxrpc_call, sock_node);
-			if (user_call_ID < xcall->user_call_ID)
+			if (user_call_ID < call->user_call_ID)
 				pp = &(*pp)->rb_left;
-			else if (user_call_ID > xcall->user_call_ID)
+			else if (user_call_ID > call->user_call_ID)
 				pp = &(*pp)->rb_right;
 			else
 				goto id_in_use;
@@ -232,8 +227,6 @@ void rxrpc_discard_prealloc(struct rxrpc_sock *rx)
 		if (rx->discard_new_call) {
 			_debug("discard %lx", call->user_call_ID);
 			rx->discard_new_call(call, call->user_call_ID);
-			if (call->notify_rx)
-				call->notify_rx = rxrpc_dummy_notify;
 			rxrpc_put_call(call, rxrpc_call_put_kernel);
 		}
 		rxrpc_call_completed(call);
@@ -425,11 +418,11 @@ found_service:
 
 	case RXRPC_CONN_REMOTELY_ABORTED:
 		rxrpc_set_call_completion(call, RXRPC_CALL_REMOTELY_ABORTED,
-					  conn->abort_code, conn->error);
+					  conn->remote_abort, -ECONNABORTED);
 		break;
 	case RXRPC_CONN_LOCALLY_ABORTED:
 		rxrpc_abort_call("CON", call, sp->hdr.seq,
-				 conn->abort_code, conn->error);
+				 conn->local_abort, -ECONNABORTED);
 		break;
 	default:
 		BUG();

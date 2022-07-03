@@ -14,7 +14,6 @@
 
 #include <linux/mm.h>
 #include <linux/cpu.h>
-#include <linux/device.h>
 #include <linux/nmi.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -165,8 +164,6 @@ static void lockup_detector_update_enable(void)
 
 #ifdef CONFIG_SOFTLOCKUP_DETECTOR
 
-#define SOFTLOCKUP_RESET	ULONG_MAX
-
 /* Global variables, exported for sysctl */
 unsigned int __read_mostly softlockup_panic =
 			CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC_VALUE;
@@ -177,7 +174,6 @@ static u64 __read_mostly sample_period;
 static DEFINE_PER_CPU(unsigned long, watchdog_touch_ts);
 static DEFINE_PER_CPU(struct task_struct *, softlockup_watchdog);
 static DEFINE_PER_CPU(struct hrtimer, watchdog_hrtimer);
-static DEFINE_PER_CPU(unsigned int, watchdog_en);
 static DEFINE_PER_CPU(bool, softlockup_touch_sync);
 static DEFINE_PER_CPU(bool, soft_watchdog_warn);
 static DEFINE_PER_CPU(unsigned long, hrtimer_interrupts);
@@ -269,16 +265,16 @@ static void __touch_watchdog(void)
  * entering idle state.  This should only be used for scheduler events.
  * Use touch_softlockup_watchdog() for everything else.
  */
-notrace void touch_softlockup_watchdog_sched(void)
+void touch_softlockup_watchdog_sched(void)
 {
 	/*
 	 * Preemption can be enabled.  It doesn't matter which CPU's timestamp
 	 * gets zeroed here, so use the raw_ operation.
 	 */
-	raw_cpu_write(watchdog_touch_ts, SOFTLOCKUP_RESET);
+	raw_cpu_write(watchdog_touch_ts, 0);
 }
 
-notrace void touch_softlockup_watchdog(void)
+void touch_softlockup_watchdog(void)
 {
 	touch_softlockup_watchdog_sched();
 	wq_watchdog_touch(raw_smp_processor_id());
@@ -299,14 +295,14 @@ void touch_all_softlockup_watchdogs(void)
 	 * the softlockup check.
 	 */
 	for_each_cpu(cpu, &watchdog_allowed_mask)
-		per_cpu(watchdog_touch_ts, cpu) = SOFTLOCKUP_RESET;
+		per_cpu(watchdog_touch_ts, cpu) = 0;
 	wq_watchdog_touch(-1);
 }
 
 void touch_softlockup_watchdog_sync(void)
 {
 	__this_cpu_write(softlockup_touch_sync, true);
-	__this_cpu_write(watchdog_touch_ts, SOFTLOCKUP_RESET);
+	__this_cpu_write(watchdog_touch_ts, 0);
 }
 
 static int is_softlockup(unsigned long touch_ts)
@@ -358,7 +354,7 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 	/* .. and repeat */
 	hrtimer_forward_now(hrtimer, ns_to_ktime(sample_period));
 
-	if (touch_ts == SOFTLOCKUP_RESET) {
+	if (touch_ts == 0) {
 		if (unlikely(__this_cpu_read(softlockup_touch_sync))) {
 			/*
 			 * If the time stamp was touched atomically
@@ -458,13 +454,9 @@ static void watchdog_set_prio(unsigned int policy, unsigned int prio)
 	sched_setscheduler(current, policy, &param);
 }
 
-void watchdog_enable(unsigned int cpu)
+static void watchdog_enable(unsigned int cpu)
 {
 	struct hrtimer *hrtimer = this_cpu_ptr(&watchdog_hrtimer);
-	unsigned int *enabled = this_cpu_ptr(&watchdog_en);
-
-	if (*enabled)
-		return;
 
 	/*
 	 * Start the timer first to prevent the NMI watchdog triggering
@@ -482,24 +474,11 @@ void watchdog_enable(unsigned int cpu)
 		watchdog_nmi_enable(cpu);
 
 	watchdog_set_prio(SCHED_FIFO, MAX_RT_PRIO - 1);
-
-	/*
-	 * Need to ensure above operations are observed by other CPUs before
-	 * indicating that timer is enabled. This is to synchronize core
-	 * isolation and hotplug. Core isolation will wait for this flag to be
-	 * set.
-	 */
-	mb();
-	*enabled = 1;
 }
 
-void watchdog_disable(unsigned int cpu)
+static void watchdog_disable(unsigned int cpu)
 {
 	struct hrtimer *hrtimer = this_cpu_ptr(&watchdog_hrtimer);
-	unsigned int *enabled = this_cpu_ptr(&watchdog_en);
-
-	if (!*enabled)
-		return;
 
 	watchdog_set_prio(SCHED_NORMAL, 0);
 	/*
@@ -509,17 +488,6 @@ void watchdog_disable(unsigned int cpu)
 	 */
 	watchdog_nmi_disable(cpu);
 	hrtimer_cancel(hrtimer);
-
-	/*
-	 * No need for barrier here since disabling the watchdog is
-	 * synchronized with hotplug lock
-	 */
-	*enabled = 0;
-}
-
-bool watchdog_configured(unsigned int cpu)
-{
-	return *per_cpu_ptr(&watchdog_en, cpu);
 }
 
 static void watchdog_cleanup(unsigned int cpu, bool online)

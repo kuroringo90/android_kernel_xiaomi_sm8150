@@ -69,12 +69,11 @@ static ssize_t driver_override_show(struct device *_dev,
 				    struct device_attribute *attr, char *buf)
 {
 	struct amba_device *dev = to_amba_device(_dev);
-	ssize_t len;
 
-	device_lock(_dev);
-	len = sprintf(buf, "%s\n", dev->driver_override);
-	device_unlock(_dev);
-	return len;
+	if (!dev->driver_override)
+		return 0;
+
+	return sprintf(buf, "%s\n", dev->driver_override);
 }
 
 static ssize_t driver_override_store(struct device *_dev,
@@ -82,10 +81,9 @@ static ssize_t driver_override_store(struct device *_dev,
 				     const char *buf, size_t count)
 {
 	struct amba_device *dev = to_amba_device(_dev);
-	char *driver_override, *old, *cp;
+	char *driver_override, *old = dev->driver_override, *cp;
 
-	/* We need to keep extra room for a newline */
-	if (count >= (PAGE_SIZE - 1))
+	if (count > PATH_MAX)
 		return -EINVAL;
 
 	driver_override = kstrndup(buf, count, GFP_KERNEL);
@@ -96,15 +94,12 @@ static ssize_t driver_override_store(struct device *_dev,
 	if (cp)
 		*cp = '\0';
 
-	device_lock(_dev);
-	old = dev->driver_override;
 	if (strlen(driver_override)) {
 		dev->driver_override = driver_override;
 	} else {
 	       kfree(driver_override);
 	       dev->driver_override = NULL;
 	}
-	device_unlock(_dev);
 
 	kfree(old);
 
@@ -279,11 +274,10 @@ static int amba_remove(struct device *dev)
 {
 	struct amba_device *pcdev = to_amba_device(dev);
 	struct amba_driver *drv = to_amba_driver(dev->driver);
-	int ret = 0;
+	int ret;
 
 	pm_runtime_get_sync(dev);
-	if (drv->remove)
-		ret = drv->remove(pcdev);
+	ret = drv->remove(pcdev);
 	pm_runtime_put_noidle(dev);
 
 	/* Undo the runtime PM settings in amba_probe() */
@@ -300,9 +294,7 @@ static int amba_remove(struct device *dev)
 static void amba_shutdown(struct device *dev)
 {
 	struct amba_driver *drv = to_amba_driver(dev->driver);
-
-	if (drv->shutdown)
-		drv->shutdown(to_amba_device(dev));
+	drv->shutdown(to_amba_device(dev));
 }
 
 /**
@@ -315,13 +307,12 @@ static void amba_shutdown(struct device *dev)
  */
 int amba_driver_register(struct amba_driver *drv)
 {
-	if (!drv->probe)
-		return -EINVAL;
-
 	drv->drv.bus = &amba_bustype;
-	drv->drv.probe = amba_probe;
-	drv->drv.remove = amba_remove;
-	drv->drv.shutdown = amba_shutdown;
+
+#define SETFN(fn)	if (drv->fn) drv->drv.fn = amba_##fn
+	SETFN(probe);
+	SETFN(remove);
+	SETFN(shutdown);
 
 	return driver_register(&drv->drv);
 }
@@ -354,6 +345,9 @@ static int amba_device_try_add(struct amba_device *dev, struct resource *parent)
 	u32 size;
 	void __iomem *tmp;
 	int i, ret;
+
+	WARN_ON(dev->irq[0] == (unsigned int)-1);
+	WARN_ON(dev->irq[1] == (unsigned int)-1);
 
 	ret = request_resource(parent, &dev->res);
 	if (ret)

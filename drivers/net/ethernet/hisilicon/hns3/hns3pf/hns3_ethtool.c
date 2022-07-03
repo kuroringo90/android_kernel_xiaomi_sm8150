@@ -22,8 +22,7 @@ struct hns3_stats {
 #define HNS3_TQP_STAT(_string, _member)	{			\
 	.stats_string = _string,				\
 	.stats_size = FIELD_SIZEOF(struct ring_stats, _member),	\
-	.stats_offset = offsetof(struct hns3_enet_ring, stats) +\
-			offsetof(struct ring_stats, _member),   \
+	.stats_offset = offsetof(struct hns3_enet_ring, stats),	\
 }								\
 
 static const struct hns3_stats hns3_txq_stats[] = {
@@ -190,13 +189,13 @@ static u64 *hns3_get_stats_tqps(struct hnae3_handle *handle, u64 *data)
 	struct hnae3_knic_private_info *kinfo = &handle->kinfo;
 	struct hns3_enet_ring *ring;
 	u8 *stat;
-	int i, j;
+	u32 i;
 
 	/* get stats for Tx */
 	for (i = 0; i < kinfo->num_tqps; i++) {
 		ring = nic_priv->ring_data[i].ring;
-		for (j = 0; j < HNS3_TXQ_STATS_COUNT; j++) {
-			stat = (u8 *)ring + hns3_txq_stats[j].stats_offset;
+		for (i = 0; i < HNS3_TXQ_STATS_COUNT; i++) {
+			stat = (u8 *)ring + hns3_txq_stats[i].stats_offset;
 			*data++ = *(u64 *)stat;
 		}
 	}
@@ -204,8 +203,8 @@ static u64 *hns3_get_stats_tqps(struct hnae3_handle *handle, u64 *data)
 	/* get stats for Rx */
 	for (i = 0; i < kinfo->num_tqps; i++) {
 		ring = nic_priv->ring_data[i + kinfo->num_tqps].ring;
-		for (j = 0; j < HNS3_RXQ_STATS_COUNT; j++) {
-			stat = (u8 *)ring + hns3_rxq_stats[j].stats_offset;
+		for (i = 0; i < HNS3_RXQ_STATS_COUNT; i++) {
+			stat = (u8 *)ring + hns3_rxq_stats[i].stats_offset;
 			*data++ = *(u64 *)stat;
 		}
 	}
@@ -375,9 +374,6 @@ static int hns3_get_link_ksettings(struct net_device *netdev,
 			advertised_caps = 0;
 			break;
 		}
-
-		if (!cmd->base.autoneg)
-			advertised_caps &= ~HNS3_LM_AUTONEG_BIT;
 
 		/* now, map driver link modes to ethtool link modes */
 		hns3_driv_to_eth_caps(supported_caps, cmd, false);

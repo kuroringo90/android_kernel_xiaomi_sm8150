@@ -142,34 +142,27 @@ static int nldev_get_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	index = nla_get_u32(tb[RDMA_NLDEV_ATTR_DEV_INDEX]);
 
-	device = ib_device_get_by_index(index);
+	device = __ib_device_get_by_index(index);
 	if (!device)
 		return -EINVAL;
 
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
-	if (!msg) {
-		err = -ENOMEM;
-		goto err;
-	}
+	if (!msg)
+		return -ENOMEM;
 
 	nlh = nlmsg_put(msg, NETLINK_CB(skb).portid, nlh->nlmsg_seq,
 			RDMA_NL_GET_TYPE(RDMA_NL_NLDEV, RDMA_NLDEV_CMD_GET),
 			0, 0);
 
 	err = fill_dev_info(msg, device);
-	if (err)
-		goto err_free;
+	if (err) {
+		nlmsg_free(msg);
+		return err;
+	}
 
 	nlmsg_end(msg, nlh);
 
-	put_device(&device->dev);
 	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
-
-err_free:
-	nlmsg_free(msg);
-err:
-	put_device(&device->dev);
-	return err;
 }
 
 static int _nldev_get_dumpit(struct ib_device *device,
@@ -227,40 +220,31 @@ static int nldev_port_get_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 		return -EINVAL;
 
 	index = nla_get_u32(tb[RDMA_NLDEV_ATTR_DEV_INDEX]);
-	device = ib_device_get_by_index(index);
+	device = __ib_device_get_by_index(index);
 	if (!device)
 		return -EINVAL;
 
 	port = nla_get_u32(tb[RDMA_NLDEV_ATTR_PORT_INDEX]);
-	if (!rdma_is_port_valid(device, port)) {
-		err = -EINVAL;
-		goto err;
-	}
+	if (!rdma_is_port_valid(device, port))
+		return -EINVAL;
 
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
-	if (!msg) {
-		err = -ENOMEM;
-		goto err;
-	}
+	if (!msg)
+		return -ENOMEM;
 
 	nlh = nlmsg_put(msg, NETLINK_CB(skb).portid, nlh->nlmsg_seq,
 			RDMA_NL_GET_TYPE(RDMA_NL_NLDEV, RDMA_NLDEV_CMD_GET),
 			0, 0);
 
 	err = fill_port_info(msg, device, port);
-	if (err)
-		goto err_free;
+	if (err) {
+		nlmsg_free(msg);
+		return err;
+	}
 
 	nlmsg_end(msg, nlh);
-	put_device(&device->dev);
 
 	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
-
-err_free:
-	nlmsg_free(msg);
-err:
-	put_device(&device->dev);
-	return err;
 }
 
 static int nldev_port_get_dumpit(struct sk_buff *skb,
@@ -281,7 +265,7 @@ static int nldev_port_get_dumpit(struct sk_buff *skb,
 		return -EINVAL;
 
 	ifindex = nla_get_u32(tb[RDMA_NLDEV_ATTR_DEV_INDEX]);
-	device = ib_device_get_by_index(ifindex);
+	device = __ib_device_get_by_index(ifindex);
 	if (!device)
 		return -EINVAL;
 
@@ -315,13 +299,11 @@ static int nldev_port_get_dumpit(struct sk_buff *skb,
 		nlmsg_end(skb, nlh);
 	}
 
-out:
-	put_device(&device->dev);
-	cb->args[0] = idx;
+out:	cb->args[0] = idx;
 	return skb->len;
 }
 
-static const struct rdma_nl_cbs nldev_cb_table[RDMA_NLDEV_NUM_OPS] = {
+static const struct rdma_nl_cbs nldev_cb_table[] = {
 	[RDMA_NLDEV_CMD_GET] = {
 		.doit = nldev_get_doit,
 		.dump = nldev_get_dumpit,

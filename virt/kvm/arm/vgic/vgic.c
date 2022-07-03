@@ -199,13 +199,6 @@ static int vgic_irq_cmp(void *priv, struct list_head *a, struct list_head *b)
 	bool penda, pendb;
 	int ret;
 
-	/*
-	 * list_sort may call this function with the same element when
-	 * the list is fairly long.
-	 */
-	if (unlikely(irqa == irqb))
-		return 0;
-
 	spin_lock(&irqa->irq_lock);
 	spin_lock_nested(&irqb->irq_lock, SINGLE_DEPTH_NESTING);
 
@@ -461,7 +454,6 @@ int kvm_vgic_unmap_phys_irq(struct kvm_vcpu *vcpu, unsigned int virt_irq)
 int kvm_vgic_set_owner(struct kvm_vcpu *vcpu, unsigned int intid, void *owner)
 {
 	struct vgic_irq *irq;
-	unsigned long flags;
 	int ret = 0;
 
 	if (!vgic_initialized(vcpu->kvm))
@@ -472,12 +464,12 @@ int kvm_vgic_set_owner(struct kvm_vcpu *vcpu, unsigned int intid, void *owner)
 		return -EINVAL;
 
 	irq = vgic_get_irq(vcpu->kvm, vcpu, intid);
-	spin_lock_irqsave(&irq->irq_lock, flags);
+	spin_lock(&irq->irq_lock);
 	if (irq->owner && irq->owner != owner)
 		ret = -EEXIST;
 	else
 		irq->owner = owner;
-	spin_unlock_irqrestore(&irq->irq_lock, flags);
+	spin_unlock(&irq->irq_lock);
 
 	return ret;
 }
@@ -617,37 +609,22 @@ static inline void vgic_set_underflow(struct kvm_vcpu *vcpu)
 		vgic_v3_set_underflow(vcpu);
 }
 
-static inline void vgic_set_npie(struct kvm_vcpu *vcpu)
-{
-	if (kvm_vgic_global_state.type == VGIC_V2)
-		vgic_v2_set_npie(vcpu);
-	else
-		vgic_v3_set_npie(vcpu);
-}
-
 /* Requires the ap_list_lock to be held. */
-static int compute_ap_list_depth(struct kvm_vcpu *vcpu,
-				 bool *multi_sgi)
+static int compute_ap_list_depth(struct kvm_vcpu *vcpu)
 {
 	struct vgic_cpu *vgic_cpu = &vcpu->arch.vgic_cpu;
 	struct vgic_irq *irq;
 	int count = 0;
-
-	*multi_sgi = false;
 
 	DEBUG_SPINLOCK_BUG_ON(!spin_is_locked(&vgic_cpu->ap_list_lock));
 
 	list_for_each_entry(irq, &vgic_cpu->ap_list_head, ap_list) {
 		spin_lock(&irq->irq_lock);
 		/* GICv2 SGIs can count for more than one... */
-		if (vgic_irq_is_sgi(irq->intid) && irq->source) {
-			int w = hweight8(irq->source);
-
-			count += w;
-			*multi_sgi |= (w > 1);
-		} else {
+		if (vgic_irq_is_sgi(irq->intid) && irq->source)
+			count += hweight8(irq->source);
+		else
 			count++;
-		}
 		spin_unlock(&irq->irq_lock);
 	}
 	return count;
@@ -658,43 +635,28 @@ static void vgic_flush_lr_state(struct kvm_vcpu *vcpu)
 {
 	struct vgic_cpu *vgic_cpu = &vcpu->arch.vgic_cpu;
 	struct vgic_irq *irq;
-	int count;
-	bool npie = false;
-	bool multi_sgi;
-	u8 prio = 0xff;
+	int count = 0;
 
 	DEBUG_SPINLOCK_BUG_ON(!spin_is_locked(&vgic_cpu->ap_list_lock));
 
-	count = compute_ap_list_depth(vcpu, &multi_sgi);
-	if (count > kvm_vgic_global_state.nr_lr || multi_sgi)
+	if (compute_ap_list_depth(vcpu) > kvm_vgic_global_state.nr_lr)
 		vgic_sort_ap_list(vcpu);
-
-	count = 0;
 
 	list_for_each_entry(irq, &vgic_cpu->ap_list_head, ap_list) {
 		spin_lock(&irq->irq_lock);
 
+		if (unlikely(vgic_target_oracle(irq) != vcpu))
+			goto next;
+
 		/*
-		 * If we have multi-SGIs in the pipeline, we need to
-		 * guarantee that they are all seen before any IRQ of
-		 * lower priority. In that case, we need to filter out
-		 * these interrupts by exiting early. This is easy as
-		 * the AP list has been sorted already.
+		 * If we get an SGI with multiple sources, try to get
+		 * them in all at once.
 		 */
-		if (multi_sgi && irq->priority > prio) {
-			spin_unlock(&irq->irq_lock);
-			break;
-		}
-
-		if (likely(vgic_target_oracle(irq) == vcpu)) {
+		do {
 			vgic_populate_lr(vcpu, irq, count++);
+		} while (irq->source && count < kvm_vgic_global_state.nr_lr);
 
-			if (irq->source) {
-				npie = true;
-				prio = irq->priority;
-			}
-		}
-
+next:
 		spin_unlock(&irq->irq_lock);
 
 		if (count == kvm_vgic_global_state.nr_lr) {
@@ -704,9 +666,6 @@ static void vgic_flush_lr_state(struct kvm_vcpu *vcpu)
 			break;
 		}
 	}
-
-	if (npie)
-		vgic_set_npie(vcpu);
 
 	vcpu->arch.vgic_cpu.used_lrs = count;
 
@@ -769,17 +728,6 @@ void kvm_vgic_put(struct kvm_vcpu *vcpu)
 		vgic_v2_put(vcpu);
 	else
 		vgic_v3_put(vcpu);
-}
-
-void kvm_vgic_vmcr_sync(struct kvm_vcpu *vcpu)
-{
-	if (unlikely(!irqchip_in_kernel(vcpu->kvm)))
-		return;
-
-	if (kvm_vgic_global_state.type == VGIC_V2)
-		vgic_v2_vmcr_sync(vcpu);
-	else
-		vgic_v3_vmcr_sync(vcpu);
 }
 
 int kvm_vgic_vcpu_pending_irq(struct kvm_vcpu *vcpu)

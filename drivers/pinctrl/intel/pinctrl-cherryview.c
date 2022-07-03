@@ -1514,15 +1514,11 @@ static void chv_gpio_irq_handler(struct irq_desc *desc)
 	struct chv_pinctrl *pctrl = gpiochip_get_data(gc);
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	unsigned long pending;
-	unsigned long flags;
 	u32 intr_line;
 
 	chained_irq_enter(chip, desc);
 
-	raw_spin_lock_irqsave(&chv_lock, flags);
 	pending = readl(pctrl->regs + CHV_INTSTAT);
-	raw_spin_unlock_irqrestore(&chv_lock, flags);
-
 	for_each_set_bit(intr_line, &pending, pctrl->community->nirqs) {
 		unsigned irq, offset;
 
@@ -1622,22 +1618,6 @@ static int chv_gpio_probe(struct chv_pinctrl *pctrl, int irq)
 
 		if (need_valid_mask && intsel >= pctrl->community->nirqs)
 			clear_bit(i, chip->irq_valid_mask);
-	}
-
-	/*
-	 * The same set of machines in chv_no_valid_mask[] have incorrectly
-	 * configured GPIOs that generate spurious interrupts so we use
-	 * this same list to apply another quirk for them.
-	 *
-	 * See also https://bugzilla.kernel.org/show_bug.cgi?id=197953.
-	 */
-	if (!need_valid_mask) {
-		/*
-		 * Mask all interrupts the community is able to generate
-		 * but leave the ones that can only generate GPEs unmasked.
-		 */
-		chv_writel(GENMASK(31, pctrl->community->nirqs),
-			   pctrl->regs + CHV_INTMASK);
 	}
 
 	/* Clear all interrupts */

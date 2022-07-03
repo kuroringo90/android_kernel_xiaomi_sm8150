@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0
 # Makefile for vm tools
 #
-include ../scripts/Makefile.include
-
 TARGETS=page-types slabinfo page_owner_sort
 
 LIB_DIR = ../lib/api
 LIBS = $(LIB_DIR)/libapi.a
 
+CC = $(CROSS_COMPILE)gcc
 CFLAGS = -Wall -Wextra -I../lib/
 LDFLAGS = $(LIBS)
 

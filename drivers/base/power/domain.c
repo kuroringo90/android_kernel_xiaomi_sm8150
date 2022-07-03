@@ -369,10 +369,6 @@ static int genpd_power_off(struct generic_pm_domain *genpd, bool one_dev_on,
 			return -EAGAIN;
 	}
 
-	/* Default to shallowest state. */
-	if (!genpd->gov)
-		genpd->state_idx = 0;
-
 	if (genpd->power_off) {
 		int ret;
 
@@ -1602,8 +1598,6 @@ int pm_genpd_init(struct generic_pm_domain *genpd,
 		ret = genpd_set_default_power_state(genpd);
 		if (ret)
 			return ret;
-	} else if (!gov) {
-		pr_warn("%s : no governor for states\n", genpd->name);
 	}
 
 	mutex_lock(&gpd_list_lock);
@@ -2168,9 +2162,6 @@ int genpd_dev_pm_attach(struct device *dev)
 	genpd_lock(pd);
 	ret = genpd_power_on(pd, 0);
 	genpd_unlock(pd);
-
-	if (ret)
-		genpd_remove_device(pd, dev);
 out:
 	return ret ? -EPROBE_DEFER : 0;
 }
@@ -2215,38 +2206,6 @@ static int genpd_parse_state(struct genpd_power_state *genpd_state,
 	return 0;
 }
 
-static int genpd_iterate_idle_states(struct device_node *dn,
-				     struct genpd_power_state *states)
-{
-	int ret;
-	struct of_phandle_iterator it;
-	struct device_node *np;
-	int i = 0;
-
-	ret = of_count_phandle_with_args(dn, "domain-idle-states", NULL);
-	if (ret <= 0)
-		return ret;
-
-	/* Loop over the phandles until all the requested entry is found */
-	of_for_each_phandle(&it, ret, dn, "domain-idle-states", NULL, 0) {
-		np = it.node;
-		if (!of_match_node(idle_state_match, np))
-			continue;
-		if (states) {
-			ret = genpd_parse_state(&states[i], np);
-			if (ret) {
-				pr_err("Parsing idle state node %pOF failed with err %d\n",
-				       np, ret);
-				of_node_put(np);
-				return ret;
-			}
-		}
-		i++;
-	}
-
-	return i;
-}
-
 /**
  * of_genpd_parse_idle_states: Return array of idle states for the genpd.
  *
@@ -2256,31 +2215,49 @@ static int genpd_iterate_idle_states(struct device_node *dn,
  *
  * Returns the device states parsed from the OF node. The memory for the states
  * is allocated by this function and is the responsibility of the caller to
- * free the memory after use. If no domain idle states is found it returns
- * -EINVAL and in case of errors, a negative error code.
+ * free the memory after use.
  */
 int of_genpd_parse_idle_states(struct device_node *dn,
 			struct genpd_power_state **states, int *n)
 {
 	struct genpd_power_state *st;
-	int ret;
+	struct device_node *np;
+	int i = 0;
+	int err, ret;
+	int count;
+	struct of_phandle_iterator it;
+	const struct of_device_id *match_id;
 
-	ret = genpd_iterate_idle_states(dn, NULL);
-	if (ret <= 0)
-		return ret < 0 ? ret : -EINVAL;
+	count = of_count_phandle_with_args(dn, "domain-idle-states", NULL);
+	if (count <= 0)
+		return -EINVAL;
 
-	st = kcalloc(ret, sizeof(*st), GFP_KERNEL);
+	st = kcalloc(count, sizeof(*st), GFP_KERNEL);
 	if (!st)
 		return -ENOMEM;
 
-	ret = genpd_iterate_idle_states(dn, st);
-	if (ret <= 0) {
-		kfree(st);
-		return ret < 0 ? ret : -EINVAL;
+	/* Loop over the phandles until all the requested entry is found */
+	of_for_each_phandle(&it, err, dn, "domain-idle-states", NULL, 0) {
+		np = it.node;
+		match_id = of_match_node(idle_state_match, np);
+		if (!match_id)
+			continue;
+		ret = genpd_parse_state(&st[i++], np);
+		if (ret) {
+			pr_err
+			("Parsing idle state node %pOF failed with err %d\n",
+							np, ret);
+			of_node_put(np);
+			kfree(st);
+			return ret;
+		}
 	}
 
-	*states = st;
-	*n = ret;
+	*n = i;
+	if (!i)
+		kfree(st);
+	else
+		*states = st;
 
 	return 0;
 }

@@ -72,12 +72,6 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 	int err = 0;
 	size_t len = 0;
 
-	if (!ctx->used) {
-		err = af_alg_wait_for_data(sk, flags);
-		if (err)
-			return err;
-	}
-
 	/* Allocate cipher request for current operation. */
 	areq = af_alg_alloc_areq(sk, sizeof(struct af_alg_async_req) +
 				     crypto_skcipher_reqsize(tfm));
@@ -85,9 +79,13 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 		return PTR_ERR(areq);
 
 	/* convert iovecs of output buffers into RX SGL */
-	err = af_alg_get_rsgl(sk, msg, flags, areq, ctx->used, &len);
+	err = af_alg_get_rsgl(sk, msg, flags, areq, -1, &len);
 	if (err)
 		goto free;
+
+	/* Process only as much RX buffers for which we have TX data */
+	if (len > ctx->used)
+		len = ctx->used;
 
 	/*
 	 * If more buffers are to be expected to be processed, process only
@@ -121,10 +119,6 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 		/* AIO operation */
 		sock_hold(sk);
 		areq->iocb = msg->msg_iocb;
-
-		/* Remember output size that will be generated. */
-		areq->outlen = len;
-
 		skcipher_request_set_callback(&areq->cra_u.skcipher_req,
 					      CRYPTO_TFM_REQ_MAY_SLEEP,
 					      af_alg_async_cb, areq);
@@ -133,8 +127,12 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 			crypto_skcipher_decrypt(&areq->cra_u.skcipher_req);
 
 		/* AIO operation in progress */
-		if (err == -EINPROGRESS)
+		if (err == -EINPROGRESS || err == -EBUSY) {
+			/* Remember output size that will be generated. */
+			areq->outlen = len;
+
 			return -EIOCBQUEUED;
+		}
 
 		sock_put(sk);
 	} else {
@@ -223,7 +221,7 @@ static int skcipher_check_key(struct socket *sock)
 	struct alg_sock *ask = alg_sk(sk);
 
 	lock_sock(sk);
-	if (!atomic_read(&ask->nokey_refcnt))
+	if (ask->refcnt)
 		goto unlock_child;
 
 	psk = ask->parent;
@@ -235,8 +233,11 @@ static int skcipher_check_key(struct socket *sock)
 	if (!tfm->has_key)
 		goto unlock;
 
-	atomic_dec(&pask->nokey_refcnt);
-	atomic_set(&ask->nokey_refcnt, 0);
+	if (!pask->refcnt++)
+		sock_hold(psk);
+
+	ask->refcnt = 1;
+	sock_put(psk);
 
 	err = 0;
 
@@ -384,7 +385,7 @@ static int skcipher_accept_parent_nokey(void *private, struct sock *sk)
 	INIT_LIST_HEAD(&ctx->tsgl_list);
 	ctx->len = len;
 	ctx->used = 0;
-	atomic_set(&ctx->rcvused, 0);
+	ctx->rcvused = 0;
 	ctx->more = 0;
 	ctx->merge = 0;
 	ctx->enc = 0;

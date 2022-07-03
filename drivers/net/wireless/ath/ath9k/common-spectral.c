@@ -411,7 +411,7 @@ ath_cmn_process_ht20_40_fft(struct ath_rx_status *rs,
 
 		ath_dbg(common, SPECTRAL_SCAN,
 			"Calculated new upper max 0x%X at %i\n",
-			tmp_mag, fft_sample_40.upper_max_index);
+			tmp_mag, i);
 	} else
 	for (i = dc_pos; i < SPECTRAL_HT20_40_NUM_BINS; i++) {
 		if (fft_sample_40.data[i] == (upper_mag >> max_exp))
@@ -479,16 +479,14 @@ ath_cmn_is_fft_buf_full(struct ath_spec_scan_priv *spec_priv)
 {
 	int i = 0;
 	int ret = 0;
-	struct rchan_buf *buf;
 	struct rchan *rc = spec_priv->rfs_chan_spec_scan;
 
-	for_each_possible_cpu(i) {
-		if ((buf = *per_cpu_ptr(rc->buf, i))) {
-			ret += relay_buf_full(buf);
-		}
-	}
+	for_each_online_cpu(i)
+		ret += relay_buf_full(*per_cpu_ptr(rc->buf, i));
 
-	if (ret)
+	i = num_online_cpus();
+
+	if (ret == i)
 		return 1;
 	else
 		return 0;

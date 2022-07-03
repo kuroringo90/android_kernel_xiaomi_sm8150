@@ -22,7 +22,6 @@
 #include <linux/sys_soc.h>
 #include <linux/clk.h>
 #include <linux/ktime.h>
-#include <linux/dma-mapping.h>
 #include <linux/mmc/host.h>
 #include "sdhci-pltfm.h"
 #include "sdhci-esdhc.h"
@@ -427,24 +426,10 @@ static void esdhc_of_adma_workaround(struct sdhci_host *host, u32 intmask)
 
 static int esdhc_of_enable_dma(struct sdhci_host *host)
 {
-	int ret;
 	u32 value;
-	struct device *dev = mmc_dev(host->mmc);
-
-	if (of_device_is_compatible(dev->of_node, "fsl,ls1043a-esdhc") ||
-	    of_device_is_compatible(dev->of_node, "fsl,ls1046a-esdhc")) {
-		ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(40));
-		if (ret)
-			return ret;
-	}
 
 	value = sdhci_readl(host, ESDHC_DMA_SYSCTL);
-
-	if (of_dma_is_coherent(dev->of_node))
-		value |= ESDHC_DMA_SNOOP;
-	else
-		value &= ~ESDHC_DMA_SNOOP;
-
+	value |= ESDHC_DMA_SNOOP;
 	sdhci_writel(host, value, ESDHC_DMA_SYSCTL);
 	return 0;
 }
@@ -473,37 +458,6 @@ static unsigned int esdhc_of_get_min_clock(struct sdhci_host *host)
 	return clock / 256 / 16;
 }
 
-static void esdhc_clock_enable(struct sdhci_host *host, bool enable)
-{
-	u32 val;
-	ktime_t timeout;
-
-	val = sdhci_readl(host, ESDHC_SYSTEM_CONTROL);
-
-	if (enable)
-		val |= ESDHC_CLOCK_SDCLKEN;
-	else
-		val &= ~ESDHC_CLOCK_SDCLKEN;
-
-	sdhci_writel(host, val, ESDHC_SYSTEM_CONTROL);
-
-	/* Wait max 20 ms */
-	timeout = ktime_add_ms(ktime_get(), 20);
-	val = ESDHC_CLOCK_STABLE;
-	while  (1) {
-		bool timedout = ktime_after(ktime_get(), timeout);
-
-		if (sdhci_readl(host, ESDHC_PRSSTAT) & val)
-			break;
-		if (timedout) {
-			pr_err("%s: Internal clock never stabilised.\n",
-				mmc_hostname(host->mmc));
-			break;
-		}
-		udelay(10);
-	}
-}
-
 static void esdhc_of_set_clock(struct sdhci_host *host, unsigned int clock)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -515,10 +469,8 @@ static void esdhc_of_set_clock(struct sdhci_host *host, unsigned int clock)
 
 	host->mmc->actual_clock = 0;
 
-	if (clock == 0) {
-		esdhc_clock_enable(host, false);
+	if (clock == 0)
 		return;
-	}
 
 	/* Workaround to start pre_div at 2 for VNN < VENDOR_V_23 */
 	if (esdhc->vendor_ver < VENDOR_V_23)
@@ -571,12 +523,8 @@ static void esdhc_of_set_clock(struct sdhci_host *host, unsigned int clock)
 
 	/* Wait max 20 ms */
 	timeout = ktime_add_ms(ktime_get(), 20);
-	while (1) {
-		bool timedout = ktime_after(ktime_get(), timeout);
-
-		if (sdhci_readl(host, ESDHC_PRSSTAT) & ESDHC_CLOCK_STABLE)
-			break;
-		if (timedout) {
+	while (!(sdhci_readl(host, ESDHC_PRSSTAT) & ESDHC_CLOCK_STABLE)) {
+		if (ktime_after(ktime_get(), timeout)) {
 			pr_err("%s: Internal clock never stabilised.\n",
 				mmc_hostname(host->mmc));
 			return;
@@ -610,20 +558,39 @@ static void esdhc_pltfm_set_bus_width(struct sdhci_host *host, int width)
 	sdhci_writel(host, ctrl, ESDHC_PROCTL);
 }
 
-static void esdhc_reset(struct sdhci_host *host, u8 mask)
+static void esdhc_clock_enable(struct sdhci_host *host, bool enable)
 {
 	u32 val;
+	ktime_t timeout;
 
+	val = sdhci_readl(host, ESDHC_SYSTEM_CONTROL);
+
+	if (enable)
+		val |= ESDHC_CLOCK_SDCLKEN;
+	else
+		val &= ~ESDHC_CLOCK_SDCLKEN;
+
+	sdhci_writel(host, val, ESDHC_SYSTEM_CONTROL);
+
+	/* Wait max 20 ms */
+	timeout = ktime_add_ms(ktime_get(), 20);
+	val = ESDHC_CLOCK_STABLE;
+	while (!(sdhci_readl(host, ESDHC_PRSSTAT) & val)) {
+		if (ktime_after(ktime_get(), timeout)) {
+			pr_err("%s: Internal clock never stabilised.\n",
+				mmc_hostname(host->mmc));
+			break;
+		}
+		udelay(10);
+	}
+}
+
+static void esdhc_reset(struct sdhci_host *host, u8 mask)
+{
 	sdhci_reset(host, mask);
 
 	sdhci_writel(host, host->ier, SDHCI_INT_ENABLE);
 	sdhci_writel(host, host->ier, SDHCI_SIGNAL_ENABLE);
-
-	if (mask & SDHCI_RESET_ALL) {
-		val = sdhci_readl(host, ESDHC_TBCTL);
-		val &= ~ESDHC_TB_EN;
-		sdhci_writel(host, val, ESDHC_TBCTL);
-	}
 }
 
 /* The SCFG, Supplemental Configuration Unit, provides SoC specific
@@ -888,11 +855,6 @@ static int sdhci_esdhc_probe(struct platform_device *pdev)
 
 	if (esdhc->vendor_ver > VENDOR_V_22)
 		host->quirks &= ~SDHCI_QUIRK_NO_BUSY_IRQ;
-
-	if (of_find_compatible_node(NULL, NULL, "fsl,p2020-esdhc")) {
-		host->quirks |= SDHCI_QUIRK_RESET_AFTER_REQUEST;
-		host->quirks |= SDHCI_QUIRK_BROKEN_TIMEOUT_VAL;
-	}
 
 	if (of_device_is_compatible(np, "fsl,p5040-esdhc") ||
 	    of_device_is_compatible(np, "fsl,p5020-esdhc") ||

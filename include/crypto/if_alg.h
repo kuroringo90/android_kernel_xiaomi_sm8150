@@ -18,7 +18,6 @@
 #include <linux/if_alg.h>
 #include <linux/scatterlist.h>
 #include <linux/types.h>
-#include <linux/atomic.h>
 #include <net/sock.h>
 
 #include <crypto/aead.h>
@@ -34,8 +33,8 @@ struct alg_sock {
 
 	struct sock *parent;
 
-	atomic_t refcnt;
-	atomic_t nokey_refcnt;
+	unsigned int refcnt;
+	unsigned int nokey_refcnt;
 
 	const struct af_alg_type *type;
 	void *private;
@@ -156,7 +155,7 @@ struct af_alg_ctx {
 	struct af_alg_completion completion;
 
 	size_t used;
-	atomic_t rcvused;
+	size_t rcvused;
 
 	bool more;
 	bool merge;
@@ -229,7 +228,7 @@ static inline int af_alg_rcvbuf(struct sock *sk)
 	struct af_alg_ctx *ctx = ask->private;
 
 	return max_t(int, max_t(int, sk->sk_rcvbuf & PAGE_MASK, PAGE_SIZE) -
-		     atomic_read(&ctx->rcvused), 0);
+			  ctx->rcvused, 0);
 }
 
 /**

@@ -377,13 +377,10 @@ static struct dentry *reiserfs_lookup(struct inode *dir, struct dentry *dentry,
 
 		/*
 		 * Propagate the private flag so we know we're
-		 * in the priv tree.  Also clear IOP_XATTR
-		 * since we don't have xattrs on xattr files.
+		 * in the priv tree
 		 */
-		if (IS_PRIVATE(dir)) {
+		if (IS_PRIVATE(dir))
 			inode->i_flags |= S_PRIVATE;
-			inode->i_opflags &= ~IOP_XATTR;
-		}
 	}
 	reiserfs_write_unlock(dir->i_sb);
 	if (retval == IO_ERROR) {
@@ -690,7 +687,8 @@ static int reiserfs_create(struct inode *dir, struct dentry *dentry, umode_t mod
 	reiserfs_update_inode_transaction(inode);
 	reiserfs_update_inode_transaction(dir);
 
-	d_instantiate_new(dentry, inode);
+	unlock_new_inode(inode);
+	d_instantiate(dentry, inode);
 	retval = journal_end(&th);
 
 out_failed:
@@ -773,7 +771,8 @@ static int reiserfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode
 		goto out_failed;
 	}
 
-	d_instantiate_new(dentry, inode);
+	unlock_new_inode(inode);
+	d_instantiate(dentry, inode);
 	retval = journal_end(&th);
 
 out_failed:
@@ -872,7 +871,8 @@ static int reiserfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 	/* the above add_entry did not update dir's stat data */
 	reiserfs_update_sd(&th, dir);
 
-	d_instantiate_new(dentry, inode);
+	unlock_new_inode(inode);
+	d_instantiate(dentry, inode);
 	retval = journal_end(&th);
 out_failed:
 	reiserfs_write_unlock(dir->i_sb);
@@ -1187,7 +1187,8 @@ static int reiserfs_symlink(struct inode *parent_dir,
 		goto out_failed;
 	}
 
-	d_instantiate_new(dentry, inode);
+	unlock_new_inode(inode);
+	d_instantiate(dentry, inode);
 	retval = journal_end(&th);
 out_failed:
 	reiserfs_write_unlock(parent_dir->i_sb);

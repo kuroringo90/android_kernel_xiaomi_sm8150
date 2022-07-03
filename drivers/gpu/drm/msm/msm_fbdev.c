@@ -92,7 +92,8 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 
 	if (IS_ERR(fb)) {
 		dev_err(dev->dev, "failed to allocate fb\n");
-		return PTR_ERR(fb);
+		ret = PTR_ERR(fb);
+		goto fail;
 	}
 
 	bo = msm_framebuffer_bo(fb, 0);
@@ -117,7 +118,7 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 		goto fail_unlock;
 	}
 
-	DBG("fbi=%pK, dev=%pK", fbi, dev);
+	DBG("fbi=%p, dev=%p", fbi, dev);
 
 	fbdev->fb = fb;
 	helper->fb = fb;
@@ -141,7 +142,7 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 	fbi->fix.smem_start = paddr;
 	fbi->fix.smem_len = bo->size;
 
-	DBG("par=%pK, %dx%d", fbi->par, fbi->var.xres, fbi->var.yres);
+	DBG("par=%p, %dx%d", fbi->par, fbi->var.xres, fbi->var.yres);
 	DBG("allocated %dx%d fb", fbdev->fb->width, fbdev->fb->height);
 
 	mutex_unlock(&dev->struct_mutex);
@@ -150,7 +151,13 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 
 fail_unlock:
 	mutex_unlock(&dev->struct_mutex);
-	drm_framebuffer_remove(fb);
+fail:
+
+	if (ret) {
+		if (fb)
+			drm_framebuffer_remove(fb);
+	}
+
 	return ret;
 }
 

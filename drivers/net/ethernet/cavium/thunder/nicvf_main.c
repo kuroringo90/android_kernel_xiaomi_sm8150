@@ -29,13 +29,6 @@
 #define DRV_NAME	"thunder-nicvf"
 #define DRV_VERSION	"1.0"
 
-/* NOTE: Packets bigger than 1530 are split across multiple pages and XDP needs
- * the buffer to be contiguous. Allow XDP to be set up only if we don't exceed
- * this value, keeping headroom for the 14 byte Ethernet header and two
- * VLAN tags (for QinQ)
- */
-#define MAX_XDP_MTU	(1530 - ETH_HLEN - VLAN_HLEN * 2)
-
 /* Supported devices */
 static const struct pci_device_id nicvf_id_table[] = {
 	{ PCI_DEVICE_SUB(PCI_VENDOR_ID_CAVIUM,
@@ -171,17 +164,6 @@ static int nicvf_check_pf_ready(struct nicvf *nic)
 	}
 
 	return 1;
-}
-
-static void nicvf_send_cfg_done(struct nicvf *nic)
-{
-	union nic_mbx mbx = {};
-
-	mbx.msg.msg = NIC_MBOX_MSG_CFG_DONE;
-	if (nicvf_send_msg_to_pf(nic, &mbx)) {
-		netdev_err(nic->netdev,
-			   "PF didn't respond to CFG DONE msg\n");
-	}
 }
 
 static void nicvf_read_bgx_stats(struct nicvf *nic, struct bgx_stats_msg *bgx)
@@ -1152,7 +1134,7 @@ static int nicvf_register_misc_interrupt(struct nicvf *nic)
 	if (ret < 0) {
 		netdev_err(nic->netdev,
 			   "Req for #%d msix vectors failed\n", nic->num_vec);
-		return ret;
+		return 1;
 	}
 
 	sprintf(nic->irq_name[irq], "%s Mbox", "NICVF");
@@ -1171,7 +1153,7 @@ static int nicvf_register_misc_interrupt(struct nicvf *nic)
 	if (!nicvf_check_pf_ready(nic)) {
 		nicvf_disable_intr(nic, NICVF_INTR_MBOX, 0);
 		nicvf_unregister_interrupts(nic);
-		return -EIO;
+		return 1;
 	}
 
 	return 0;
@@ -1347,6 +1329,7 @@ int nicvf_open(struct net_device *netdev)
 	struct nicvf *nic = netdev_priv(netdev);
 	struct queue_set *qs = nic->qs;
 	struct nicvf_cq_poll *cq_poll = NULL;
+	union nic_mbx mbx = {};
 
 	netif_carrier_off(netdev);
 
@@ -1436,7 +1419,8 @@ int nicvf_open(struct net_device *netdev)
 		nicvf_enable_intr(nic, NICVF_INTR_RBDR, qidx);
 
 	/* Send VF config done msg to PF */
-	nicvf_send_cfg_done(nic);
+	mbx.msg.msg = NIC_MBOX_MSG_CFG_DONE;
+	nicvf_write_to_mbx(nic, &mbx);
 
 	return 0;
 cleanup:
@@ -1460,15 +1444,6 @@ static int nicvf_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct nicvf *nic = netdev_priv(netdev);
 	int orig_mtu = netdev->mtu;
-
-	/* For now just support only the usual MTU sized frames,
-	 * plus some headroom for VLAN, QinQ.
-	 */
-	if (nic->xdp_prog && new_mtu > MAX_XDP_MTU) {
-		netdev_warn(netdev, "Jumbo frames not yet supported with XDP, current MTU %d.\n",
-			    netdev->mtu);
-		return -EINVAL;
-	}
 
 	netdev->mtu = new_mtu;
 
@@ -1716,12 +1691,9 @@ static int nicvf_xdp_setup(struct nicvf *nic, struct bpf_prog *prog)
 	bool if_up = netif_running(nic->netdev);
 	struct bpf_prog *old_prog;
 	bool bpf_attached = false;
-	int ret = 0;
 
-	/* For now just support only the usual MTU sized frames,
-	 * plus some headroom for VLAN, QinQ.
-	 */
-	if (prog && dev->mtu > MAX_XDP_MTU) {
+	/* For now just support only the usual MTU sized frames */
+	if (prog && (dev->mtu > 1500)) {
 		netdev_warn(dev, "Jumbo frames not yet supported with XDP, current MTU %d.\n",
 			    dev->mtu);
 		return -EOPNOTSUPP;
@@ -1752,12 +1724,8 @@ static int nicvf_xdp_setup(struct nicvf *nic, struct bpf_prog *prog)
 	if (nic->xdp_prog) {
 		/* Attach BPF program */
 		nic->xdp_prog = bpf_prog_add(nic->xdp_prog, nic->rx_queues - 1);
-		if (!IS_ERR(nic->xdp_prog)) {
+		if (!IS_ERR(nic->xdp_prog))
 			bpf_attached = true;
-		} else {
-			ret = PTR_ERR(nic->xdp_prog);
-			nic->xdp_prog = NULL;
-		}
 	}
 
 	/* Calculate Tx queues needed for XDP and network stack */
@@ -1769,7 +1737,7 @@ static int nicvf_xdp_setup(struct nicvf *nic, struct bpf_prog *prog)
 		netif_trans_update(nic->netdev);
 	}
 
-	return ret;
+	return 0;
 }
 
 static int nicvf_xdp(struct net_device *netdev, struct netdev_xdp *xdp)
@@ -1864,11 +1832,6 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	nic->pdev = pdev;
 	nic->pnicvf = nic;
 	nic->max_queues = qcount;
-	/* If no of CPUs are too low, there won't be any queues left
-	 * for XDP_TX, hence double it.
-	 */
-	if (!nic->t88)
-		nic->max_queues *= 2;
 
 	/* MAP VF's configuration registers */
 	nic->reg_base = pcim_iomap(pdev, PCI_CFG_REG_BAR_NUM, 0);

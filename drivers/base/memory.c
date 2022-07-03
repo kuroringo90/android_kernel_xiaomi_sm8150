@@ -22,7 +22,6 @@
 #include <linux/mutex.h>
 #include <linux/stat.h>
 #include <linux/slab.h>
-#include <linux/memblock.h>
 
 #include <linux/atomic.h>
 #include <linux/uaccess.h>
@@ -448,76 +447,10 @@ out:
 static DEVICE_ATTR(valid_zones, 0444, show_valid_zones, NULL);
 #endif
 
-#ifdef CONFIG_MEMORY_HOTPLUG
-static int count_num_free_block_pages(struct zone *zone, int bid)
-{
-	int order, type;
-	unsigned long freecount = 0;
-	unsigned long flags;
-
-	spin_lock_irqsave(&zone->lock, flags);
-	for (type = 0; type < MIGRATE_TYPES; type++) {
-		for (order = 0; order < MAX_ORDER; ++order) {
-			struct free_area *area;
-			struct page *page;
-
-			area = &(zone->free_area[order]);
-			list_for_each_entry(page, &area->free_list[type], lru) {
-				unsigned long pfn = page_to_pfn(page);
-				int section_nr = pfn_to_section_nr(pfn);
-
-				if (bid == base_memory_block_id(section_nr))
-					freecount += (1 << order);
-			}
-
-		}
-	}
-	spin_unlock_irqrestore(&zone->lock, flags);
-
-	return freecount;
-}
-
-static ssize_t show_allocated_bytes(struct device *dev,
-			struct device_attribute *attr, char *buf)
-{
-	struct memory_block *mem = to_memory_block(dev);
-	int block_id, free_pages;
-	struct zone *movable_zone =
-		&NODE_DATA(numa_node_id())->node_zones[ZONE_MOVABLE];
-	unsigned long used, block_sz = get_memory_block_size();
-
-	if (!populated_zone(movable_zone) || mem->state != MEM_ONLINE)
-		return snprintf(buf, 100, "0\n");
-
-	block_id = base_memory_block_id(mem->start_section_nr);
-	free_pages = count_num_free_block_pages(movable_zone, block_id);
-	used =  block_sz - (free_pages * PAGE_SIZE);
-
-	return snprintf(buf, 100, "%lu\n", used);
-}
-
-static ssize_t show_aligned_blocks_addr(struct device *dev,
-			struct device_attribute *attr, char *buf)
-{
-	return memblock_dump_aligned_blocks_addr(buf);
-}
-
-static ssize_t show_aligned_blocks_num(struct device *dev,
-			struct device_attribute *attr, char *buf)
-{
-	return memblock_dump_aligned_blocks_num(buf);
-}
-#endif
-
 static DEVICE_ATTR(phys_index, 0444, show_mem_start_phys_index, NULL);
 static DEVICE_ATTR(state, 0644, show_mem_state, store_mem_state);
 static DEVICE_ATTR(phys_device, 0444, show_phys_device, NULL);
 static DEVICE_ATTR(removable, 0444, show_mem_removable, NULL);
-#ifdef CONFIG_MEMORY_HOTPLUG
-static DEVICE_ATTR(allocated_bytes, 0444, show_allocated_bytes, NULL);
-static DEVICE_ATTR(aligned_blocks_addr, 0444, show_aligned_blocks_addr, NULL);
-static DEVICE_ATTR(aligned_blocks_num, 0444, show_aligned_blocks_num, NULL);
-#endif
 
 /*
  * Block size attribute stuff
@@ -584,54 +517,20 @@ memory_probe_store(struct device *dev, struct device_attribute *attr,
 	if (phys_addr & ((pages_per_block << PAGE_SHIFT) - 1))
 		return -EINVAL;
 
-	ret = lock_device_hotplug_sysfs();
-	if (ret)
-		return ret;
-
 	nid = memory_add_physaddr_to_nid(phys_addr);
-	ret = __add_memory(nid, phys_addr,
-			   MIN_MEMORY_BLOCK_SIZE * sections_per_block);
+	ret = add_memory(nid, phys_addr,
+			 MIN_MEMORY_BLOCK_SIZE * sections_per_block);
 
 	if (ret)
 		goto out;
 
 	ret = count;
 out:
-	unlock_device_hotplug();
 	return ret;
 }
 
 static DEVICE_ATTR(probe, S_IWUSR, NULL, memory_probe_store);
-
-#ifdef CONFIG_MEMORY_HOTREMOVE
-static ssize_t
-memory_remove_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	u64 phys_addr;
-	int nid, ret;
-	unsigned long pages_per_block = PAGES_PER_SECTION * sections_per_block;
-
-	ret = kstrtoull(buf, 0, &phys_addr);
-	if (ret)
-		return ret;
-
-	if (phys_addr & ((pages_per_block << PAGE_SHIFT) - 1))
-		return -EINVAL;
-
-	nid = memory_add_physaddr_to_nid(phys_addr);
-	ret = lock_device_hotplug_sysfs();
-	if (ret)
-		return ret;
-
-	remove_memory(nid, phys_addr,
-			 MIN_MEMORY_BLOCK_SIZE * sections_per_block);
-	unlock_device_hotplug();
-	return count;
-}
-static DEVICE_ATTR(remove, S_IWUSR, NULL, memory_remove_store);
-#endif /* CONFIG_MEMORY_HOTREMOVE */
-#endif /* CONFIG_ARCH_MEMORY_PROBE */
+#endif
 
 #ifdef CONFIG_MEMORY_FAILURE
 /*
@@ -653,9 +552,6 @@ store_soft_offline_page(struct device *dev,
 	pfn >>= PAGE_SHIFT;
 	if (!pfn_valid(pfn))
 		return -ENXIO;
-	/* Only online pages can be soft-offlined (esp., not ZONE_DEVICE). */
-	if (!pfn_to_online_page(pfn))
-		return -EIO;
 	ret = soft_offline_page(pfn_to_page(pfn), 0);
 	return ret == 0 ? count : ret;
 }
@@ -730,9 +626,6 @@ static struct attribute *memory_memblk_attrs[] = {
 	&dev_attr_removable.attr,
 #ifdef CONFIG_MEMORY_HOTREMOVE
 	&dev_attr_valid_zones.attr,
-#endif
-#ifdef CONFIG_MEMORY_HOTPLUG
-	&dev_attr_allocated_bytes.attr,
 #endif
 	NULL
 };
@@ -897,9 +790,6 @@ bool is_memblock_offlined(struct memory_block *mem)
 static struct attribute *memory_root_attrs[] = {
 #ifdef CONFIG_ARCH_MEMORY_PROBE
 	&dev_attr_probe.attr,
-#ifdef CONFIG_MEMORY_HOTREMOVE
-	&dev_attr_remove.attr,
-#endif
 #endif
 
 #ifdef CONFIG_MEMORY_FAILURE
@@ -909,10 +799,6 @@ static struct attribute *memory_root_attrs[] = {
 
 	&dev_attr_block_size_bytes.attr,
 	&dev_attr_auto_online_blocks.attr,
-#ifdef CONFIG_MEMORY_HOTPLUG
-	&dev_attr_aligned_blocks_addr.attr,
-	&dev_attr_aligned_blocks_num.attr,
-#endif
 	NULL
 };
 

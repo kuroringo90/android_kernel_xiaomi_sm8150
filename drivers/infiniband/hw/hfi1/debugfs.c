@@ -71,13 +71,13 @@ static ssize_t hfi1_seq_read(
 	loff_t *ppos)
 {
 	struct dentry *d = file->f_path.dentry;
+	int srcu_idx;
 	ssize_t r;
 
-	r = debugfs_file_get(d);
-	if (unlikely(r))
-		return r;
-	r = seq_read(file, buf, size, ppos);
-	debugfs_file_put(d);
+	r = debugfs_use_file_start(d, &srcu_idx);
+	if (likely(!r))
+		r = seq_read(file, buf, size, ppos);
+	debugfs_use_file_finish(srcu_idx);
 	return r;
 }
 
@@ -87,13 +87,13 @@ static loff_t hfi1_seq_lseek(
 	int whence)
 {
 	struct dentry *d = file->f_path.dentry;
+	int srcu_idx;
 	loff_t r;
 
-	r = debugfs_file_get(d);
-	if (unlikely(r))
-		return r;
-	r = seq_lseek(file, offset, whence);
-	debugfs_file_put(d);
+	r = debugfs_use_file_start(d, &srcu_idx);
+	if (likely(!r))
+		r = seq_lseek(file, offset, whence);
+	debugfs_use_file_finish(srcu_idx);
 	return r;
 }
 
@@ -1179,8 +1179,7 @@ DEBUGFS_FILE_OPS(fault_stats);
 
 static void fault_exit_opcode_debugfs(struct hfi1_ibdev *ibd)
 {
-	if (ibd->fault_opcode)
-		debugfs_remove_recursive(ibd->fault_opcode->dir);
+	debugfs_remove_recursive(ibd->fault_opcode->dir);
 	kfree(ibd->fault_opcode);
 	ibd->fault_opcode = NULL;
 }
@@ -1208,7 +1207,6 @@ static int fault_init_opcode_debugfs(struct hfi1_ibdev *ibd)
 					  &ibd->fault_opcode->attr);
 	if (IS_ERR(ibd->fault_opcode->dir)) {
 		kfree(ibd->fault_opcode);
-		ibd->fault_opcode = NULL;
 		return -ENOENT;
 	}
 
@@ -1232,8 +1230,7 @@ fail:
 
 static void fault_exit_packet_debugfs(struct hfi1_ibdev *ibd)
 {
-	if (ibd->fault_packet)
-		debugfs_remove_recursive(ibd->fault_packet->dir);
+	debugfs_remove_recursive(ibd->fault_packet->dir);
 	kfree(ibd->fault_packet);
 	ibd->fault_packet = NULL;
 }
@@ -1259,7 +1256,6 @@ static int fault_init_packet_debugfs(struct hfi1_ibdev *ibd)
 					  &ibd->fault_opcode->attr);
 	if (IS_ERR(ibd->fault_packet->dir)) {
 		kfree(ibd->fault_packet);
-		ibd->fault_packet = NULL;
 		return -ENOENT;
 	}
 

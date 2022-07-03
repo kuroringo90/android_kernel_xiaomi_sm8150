@@ -1513,7 +1513,7 @@ TRACE_EVENT(xfs_extent_busy_trim,
 		  __entry->tlen)
 );
 
-DECLARE_EVENT_CLASS(xfs_agf_class,
+TRACE_EVENT(xfs_agf,
 	TP_PROTO(struct xfs_mount *mp, struct xfs_agf *agf, int flags,
 		 unsigned long caller_ip),
 	TP_ARGS(mp, agf, flags, caller_ip),
@@ -1569,13 +1569,6 @@ DECLARE_EVENT_CLASS(xfs_agf_class,
 		  __entry->longest,
 		  (void *)__entry->caller_ip)
 );
-#define DEFINE_AGF_EVENT(name) \
-DEFINE_EVENT(xfs_agf_class, name, \
-	TP_PROTO(struct xfs_mount *mp, struct xfs_agf *agf, int flags, \
-		 unsigned long caller_ip), \
-	TP_ARGS(mp, agf, flags, caller_ip))
-DEFINE_AGF_EVENT(xfs_agf);
-DEFINE_AGF_EVENT(xfs_agfl_reset);
 
 TRACE_EVENT(xfs_free_extent,
 	TP_PROTO(struct xfs_mount *mp, xfs_agnumber_t agno, xfs_agblock_t agbno,

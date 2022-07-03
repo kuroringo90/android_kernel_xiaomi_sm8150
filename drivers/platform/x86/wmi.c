@@ -307,14 +307,7 @@ static acpi_status __query_block(struct wmi_block *wblock, u8 instance,
 	 * the WQxx method failed - we should disable collection anyway.
 	 */
 	if ((block->flags & ACPI_WMI_EXPENSIVE) && ACPI_SUCCESS(wc_status)) {
-		/*
-		 * Ignore whether this WCxx call succeeds or not since
-		 * the previously executed WQxx method call might have
-		 * succeeded, and returning the failing status code
-		 * of this call would throw away the result of the WQxx
-		 * call, potentially leaking memory.
-		 */
-		acpi_execute_simple_method(handle, wc_method, 0);
+		status = acpi_execute_simple_method(handle, wc_method, 0);
 	}
 
 	return status;
@@ -754,9 +747,6 @@ static int wmi_dev_match(struct device *dev, struct device_driver *driver)
 		container_of(driver, struct wmi_driver, driver);
 	struct wmi_block *wblock = dev_to_wblock(dev);
 	const struct wmi_device_id *id = wmi_driver->id_table;
-
-	if (id == NULL)
-		return 0;
 
 	while (id->guid_string) {
 		uuid_le driver_guid;
@@ -1278,5 +1268,5 @@ static void __exit acpi_wmi_exit(void)
 	bus_unregister(&wmi_bus_type);
 }
 
-subsys_initcall_sync(acpi_wmi_init);
+subsys_initcall(acpi_wmi_init);
 module_exit(acpi_wmi_exit);

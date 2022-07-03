@@ -137,15 +137,13 @@ static unsigned long ac100_clkout_recalc_rate(struct clk_hw *hw,
 		div = (reg >> AC100_CLKOUT_PRE_DIV_SHIFT) &
 			((1 << AC100_CLKOUT_PRE_DIV_WIDTH) - 1);
 		prate = divider_recalc_rate(hw, prate, div,
-					    ac100_clkout_prediv, 0,
-					    AC100_CLKOUT_PRE_DIV_WIDTH);
+					    ac100_clkout_prediv, 0);
 	}
 
 	div = (reg >> AC100_CLKOUT_DIV_SHIFT) &
 		(BIT(AC100_CLKOUT_DIV_WIDTH) - 1);
 	return divider_recalc_rate(hw, prate, div, NULL,
-				   CLK_DIVIDER_POWER_OF_TWO,
-				   AC100_CLKOUT_DIV_WIDTH);
+				   CLK_DIVIDER_POWER_OF_TWO);
 }
 
 static long ac100_clkout_round_rate(struct clk_hw *hw, unsigned long rate,
@@ -569,12 +567,6 @@ static int ac100_rtc_probe(struct platform_device *pdev)
 		return chip->irq;
 	}
 
-	chip->rtc = devm_rtc_allocate_device(&pdev->dev);
-	if (IS_ERR(chip->rtc))
-		return PTR_ERR(chip->rtc);
-
-	chip->rtc->ops = &ac100_rtc_ops;
-
 	ret = devm_request_threaded_irq(&pdev->dev, chip->irq, NULL,
 					ac100_rtc_irq,
 					IRQF_SHARED | IRQF_ONESHOT,
@@ -594,15 +586,16 @@ static int ac100_rtc_probe(struct platform_device *pdev)
 	/* clear counter alarm pending interrupts */
 	regmap_write(chip->regmap, AC100_ALM_INT_STA, AC100_ALM_INT_ENABLE);
 
+	chip->rtc = devm_rtc_device_register(&pdev->dev, "rtc-ac100",
+					     &ac100_rtc_ops, THIS_MODULE);
+	if (IS_ERR(chip->rtc)) {
+		dev_err(&pdev->dev, "unable to register device\n");
+		return PTR_ERR(chip->rtc);
+	}
+
 	ret = ac100_rtc_register_clks(chip);
 	if (ret)
 		return ret;
-
-	ret = rtc_register_device(chip->rtc);
-	if (ret) {
-		dev_err(&pdev->dev, "unable to register device\n");
-		return ret;
-	}
 
 	dev_info(&pdev->dev, "RTC enabled\n");
 

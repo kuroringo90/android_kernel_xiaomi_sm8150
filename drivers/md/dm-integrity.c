@@ -177,7 +177,7 @@ struct dm_integrity_c {
 	__u8 sectors_per_block;
 
 	unsigned char mode;
-	int suspending;
+	bool suspending;
 
 	int failed;
 
@@ -187,7 +187,6 @@ struct dm_integrity_c {
 	struct rb_root in_progress;
 	wait_queue_head_t endio_wait;
 	struct workqueue_struct *wait_wq;
-	struct workqueue_struct *offload_wq;
 
 	unsigned char commit_seq;
 	commit_id_t commit_ids[N_COMMIT_IDS];
@@ -494,7 +493,7 @@ static void section_mac(struct dm_integrity_c *ic, unsigned section, __u8 result
 	unsigned j, size;
 
 	desc->tfm = ic->journal_mac;
-	desc->flags = 0;
+	desc->flags = CRYPTO_TFM_REQ_MAY_SLEEP;
 
 	r = crypto_shash_init(desc);
 	if (unlikely(r)) {
@@ -638,7 +637,7 @@ static void complete_journal_encrypt(struct crypto_async_request *req, int err)
 static bool do_crypt(bool encrypt, struct skcipher_request *req, struct journal_completion *comp)
 {
 	int r;
-	skcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
+	skcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG | CRYPTO_TFM_REQ_MAY_SLEEP,
 				      complete_journal_encrypt, comp);
 	if (likely(encrypt))
 		r = crypto_skcipher_encrypt(req);
@@ -1158,7 +1157,7 @@ static void dec_in_flight(struct dm_integrity_io *dio)
 			dio->range.logical_sector += dio->range.n_sectors;
 			bio_advance(bio, dio->range.n_sectors << SECTOR_SHIFT);
 			INIT_WORK(&dio->work, integrity_bio_wait);
-			queue_work(ic->offload_wq, &dio->work);
+			queue_work(ic->wait_wq, &dio->work);
 			return;
 		}
 		do_endio_flush(ic, dio);
@@ -1277,8 +1276,8 @@ again:
 						checksums_ptr - checksums, !dio->write ? TAG_CMP : TAG_WRITE);
 			if (unlikely(r)) {
 				if (r > 0) {
-					DMERR_LIMIT("Checksum failed at sector 0x%llx",
-						    (unsigned long long)(sector - ((r + ic->tag_size - 1) / ic->tag_size)));
+					DMERR("Checksum failed at sector 0x%llx",
+					      (unsigned long long)(sector - ((r + ic->tag_size - 1) / ic->tag_size)));
 					r = -EILSEQ;
 					atomic64_inc(&ic->number_of_mismatches);
 				}
@@ -1470,8 +1469,8 @@ retry_kmap:
 
 					integrity_sector_checksum(ic, logical_sector, mem + bv.bv_offset, checksums_onstack);
 					if (unlikely(memcmp(checksums_onstack, journal_entry_tag(ic, je), ic->tag_size))) {
-						DMERR_LIMIT("Checksum failed when reading from journal, at sector 0x%llx",
-							    (unsigned long long)logical_sector);
+						DMERR("Checksum failed when reading from journal, at sector 0x%llx",
+						      (unsigned long long)logical_sector);
 					}
 				}
 #endif
@@ -1578,7 +1577,7 @@ static void dm_integrity_map_continue(struct dm_integrity_io *dio, bool from_map
 
 	if (need_sync_io && from_map) {
 		INIT_WORK(&dio->work, integrity_bio_wait);
-		queue_work(ic->offload_wq, &dio->work);
+		queue_work(ic->metadata_wq, &dio->work);
 		return;
 	}
 
@@ -2210,7 +2209,7 @@ static void dm_integrity_postsuspend(struct dm_target *ti)
 
 	del_timer_sync(&ic->autocommit_timer);
 
-	WRITE_ONCE(ic->suspending, 1);
+	ic->suspending = true;
 
 	queue_work(ic->commit_wq, &ic->commit_work);
 	drain_workqueue(ic->commit_wq);
@@ -2220,7 +2219,7 @@ static void dm_integrity_postsuspend(struct dm_target *ti)
 		dm_integrity_flush_buffers(ic);
 	}
 
-	WRITE_ONCE(ic->suspending, 0);
+	ic->suspending = false;
 
 	BUG_ON(!RB_EMPTY_ROOT(&ic->in_progress));
 
@@ -2440,7 +2439,7 @@ static void dm_integrity_free_journal_scatterlist(struct dm_integrity_c *ic, str
 	unsigned i;
 	for (i = 0; i < ic->journal_sections; i++)
 		kvfree(sl[i]);
-	kvfree(sl);
+	kfree(sl);
 }
 
 static struct scatterlist **dm_integrity_alloc_journal_scatterlist(struct dm_integrity_c *ic, struct page_list *pl)
@@ -2548,9 +2547,6 @@ static int get_mac(struct crypto_shash **hash, struct alg_spec *a, char **error,
 				*error = error_key;
 				return r;
 			}
-		} else if (crypto_shash_get_flags(*hash) & CRYPTO_TFM_NEED_KEY) {
-			*error = error_key;
-			return -ENOKEY;
 		}
 	}
 
@@ -2562,8 +2558,7 @@ static int create_journal(struct dm_integrity_c *ic, char **error)
 	int r = 0;
 	unsigned i;
 	__u64 journal_pages, journal_desc_size, journal_tree_size;
-	unsigned char *crypt_data = NULL, *crypt_iv = NULL;
-	struct skcipher_request *req = NULL;
+	unsigned char *crypt_data = NULL;
 
 	ic->commit_ids[0] = cpu_to_le64(0x1111111111111111ULL);
 	ic->commit_ids[1] = cpu_to_le64(0x2222222222222222ULL);
@@ -2621,20 +2616,9 @@ static int create_journal(struct dm_integrity_c *ic, char **error)
 
 		if (blocksize == 1) {
 			struct scatterlist *sg;
-
-			req = skcipher_request_alloc(ic->journal_crypt, GFP_KERNEL);
-			if (!req) {
-				*error = "Could not allocate crypt request";
-				r = -ENOMEM;
-				goto bad;
-			}
-
-			crypt_iv = kmalloc(ivsize, GFP_KERNEL);
-			if (!crypt_iv) {
-				*error = "Could not allocate iv";
-				r = -ENOMEM;
-				goto bad;
-			}
+			SKCIPHER_REQUEST_ON_STACK(req, ic->journal_crypt);
+			unsigned char iv[ivsize];
+			skcipher_request_set_tfm(req, ic->journal_crypt);
 
 			ic->journal_xor = dm_integrity_alloc_page_list(ic);
 			if (!ic->journal_xor) {
@@ -2656,9 +2640,9 @@ static int create_journal(struct dm_integrity_c *ic, char **error)
 				sg_set_buf(&sg[i], va, PAGE_SIZE);
 			}
 			sg_set_buf(&sg[i], &ic->commit_ids, sizeof ic->commit_ids);
-			memset(crypt_iv, 0x00, ivsize);
+			memset(iv, 0x00, ivsize);
 
-			skcipher_request_set_crypt(req, sg, sg, PAGE_SIZE * ic->journal_pages + sizeof ic->commit_ids, crypt_iv);
+			skcipher_request_set_crypt(req, sg, sg, PAGE_SIZE * ic->journal_pages + sizeof ic->commit_ids, iv);
 			init_completion(&comp.comp);
 			comp.in_flight = (atomic_t)ATOMIC_INIT(1);
 			if (do_crypt(true, req, &comp))
@@ -2674,21 +2658,9 @@ static int create_journal(struct dm_integrity_c *ic, char **error)
 			crypto_free_skcipher(ic->journal_crypt);
 			ic->journal_crypt = NULL;
 		} else {
+			SKCIPHER_REQUEST_ON_STACK(req, ic->journal_crypt);
+			unsigned char iv[ivsize];
 			unsigned crypt_len = roundup(ivsize, blocksize);
-
-			req = skcipher_request_alloc(ic->journal_crypt, GFP_KERNEL);
-			if (!req) {
-				*error = "Could not allocate crypt request";
-				r = -ENOMEM;
-				goto bad;
-			}
-
-			crypt_iv = kmalloc(ivsize, GFP_KERNEL);
-			if (!crypt_iv) {
-				*error = "Could not allocate iv";
-				r = -ENOMEM;
-				goto bad;
-			}
 
 			crypt_data = kmalloc(crypt_len, GFP_KERNEL);
 			if (!crypt_data) {
@@ -2696,6 +2668,8 @@ static int create_journal(struct dm_integrity_c *ic, char **error)
 				r = -ENOMEM;
 				goto bad;
 			}
+
+			skcipher_request_set_tfm(req, ic->journal_crypt);
 
 			ic->journal_scatterlist = dm_integrity_alloc_journal_scatterlist(ic, ic->journal);
 			if (!ic->journal_scatterlist) {
@@ -2720,12 +2694,12 @@ static int create_journal(struct dm_integrity_c *ic, char **error)
 				struct skcipher_request *section_req;
 				__u32 section_le = cpu_to_le32(i);
 
-				memset(crypt_iv, 0x00, ivsize);
+				memset(iv, 0x00, ivsize);
 				memset(crypt_data, 0x00, crypt_len);
 				memcpy(crypt_data, &section_le, min((size_t)crypt_len, sizeof(section_le)));
 
 				sg_init_one(&sg, crypt_data, crypt_len);
-				skcipher_request_set_crypt(req, &sg, &sg, crypt_len, crypt_iv);
+				skcipher_request_set_crypt(req, &sg, &sg, crypt_len, iv);
 				init_completion(&comp.comp);
 				comp.in_flight = (atomic_t)ATOMIC_INIT(1);
 				if (do_crypt(true, req, &comp))
@@ -2783,9 +2757,6 @@ retest_commit_id:
 	}
 bad:
 	kfree(crypt_data);
-	kfree(crypt_iv);
-	skcipher_request_free(req);
-
 	return r;
 }
 
@@ -2918,17 +2889,17 @@ static int dm_integrity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 				goto bad;
 			}
 			ic->sectors_per_block = val >> SECTOR_SHIFT;
-		} else if (!strncmp(opt_string, "internal_hash:", strlen("internal_hash:"))) {
+		} else if (!memcmp(opt_string, "internal_hash:", strlen("internal_hash:"))) {
 			r = get_alg_and_key(opt_string, &ic->internal_hash_alg, &ti->error,
 					    "Invalid internal_hash argument");
 			if (r)
 				goto bad;
-		} else if (!strncmp(opt_string, "journal_crypt:", strlen("journal_crypt:"))) {
+		} else if (!memcmp(opt_string, "journal_crypt:", strlen("journal_crypt:"))) {
 			r = get_alg_and_key(opt_string, &ic->journal_crypt_alg, &ti->error,
 					    "Invalid journal_crypt argument");
 			if (r)
 				goto bad;
-		} else if (!strncmp(opt_string, "journal_mac:", strlen("journal_mac:"))) {
+		} else if (!memcmp(opt_string, "journal_mac:", strlen("journal_mac:"))) {
 			r = get_alg_and_key(opt_string, &ic->journal_mac_alg,  &ti->error,
 					    "Invalid journal_mac argument");
 			if (r)
@@ -3001,14 +2972,6 @@ static int dm_integrity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	 */
 	ic->wait_wq = alloc_workqueue("dm-integrity-wait", WQ_MEM_RECLAIM | WQ_UNBOUND, 1);
 	if (!ic->wait_wq) {
-		ti->error = "Cannot allocate workqueue";
-		r = -ENOMEM;
-		goto bad;
-	}
-
-	ic->offload_wq = alloc_workqueue("dm-integrity-offload", WQ_MEM_RECLAIM,
-					  METADATA_WORKQUEUE_MAX_ACTIVE);
-	if (!ic->offload_wq) {
 		ti->error = "Cannot allocate workqueue";
 		r = -ENOMEM;
 		goto bad;
@@ -3156,6 +3119,8 @@ static int dm_integrity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	if (should_write_sb) {
+		int r;
+
 		init_journal(ic, 0, ic->journal_sections, 0);
 		r = dm_integrity_failed(ic);
 		if (unlikely(r)) {
@@ -3196,8 +3161,6 @@ static void dm_integrity_dtr(struct dm_target *ti)
 		destroy_workqueue(ic->metadata_wq);
 	if (ic->wait_wq)
 		destroy_workqueue(ic->wait_wq);
-	if (ic->offload_wq)
-		destroy_workqueue(ic->offload_wq);
 	if (ic->commit_wq)
 		destroy_workqueue(ic->commit_wq);
 	if (ic->writer_wq)

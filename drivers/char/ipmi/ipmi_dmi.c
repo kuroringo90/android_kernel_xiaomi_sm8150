@@ -81,10 +81,7 @@ static void __init dmi_add_platform_ipmi(unsigned long base_addr,
 		pr_err("ipmi:dmi: Error allocation IPMI platform device");
 		return;
 	}
-	pdev->driver_override = kasprintf(GFP_KERNEL, "%s",
-					  override);
-	if (!pdev->driver_override)
-		goto err;
+	pdev->driver_override = override;
 
 	if (type == IPMI_DMI_TYPE_SSIF)
 		goto add_properties;
@@ -197,10 +194,6 @@ static void __init dmi_decode_ipmi(const struct dmi_header *dm)
 	slave_addr = data[DMI_IPMI_SLAVEADDR];
 
 	memcpy(&base_addr, data + DMI_IPMI_ADDR, sizeof(unsigned long));
-	if (!base_addr) {
-		pr_err("Base address is zero, assuming no IPMI interface\n");
-		return;
-	}
 	if (len >= DMI_IPMI_VER2_LENGTH) {
 		if (type == IPMI_DMI_TYPE_SSIF) {
 			offset = 0;

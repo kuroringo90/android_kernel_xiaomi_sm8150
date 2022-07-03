@@ -33,6 +33,7 @@
 #include <linux/interrupt.h>
 #include <linux/timer.h>
 #include <linux/cper.h>
+#include <linux/kdebug.h>
 #include <linux/platform_device.h>
 #include <linux/mutex.h>
 #include <linux/ratelimit.h>
@@ -50,7 +51,6 @@
 #include <acpi/actbl1.h>
 #include <acpi/ghes.h>
 #include <acpi/apei.h>
-#include <asm/fixmap.h>
 #include <asm/tlbflush.h>
 #include <ras/ras_event.h>
 
@@ -112,10 +112,22 @@ static DEFINE_MUTEX(ghes_list_mutex);
  * Because the memory area used to transfer hardware error information
  * from BIOS to Linux can be determined only in NMI, IRQ or timer
  * handler, but general ioremap can not be used in atomic context, so
- * the fixmap is used instead.
- *
- * These 2 spinlocks are used to prevent the fixmap entries from being used
- * simultaneously.
+ * a special version of atomic ioremap is implemented for that.
+ */
+
+/*
+ * Two virtual pages are used, one for IRQ/PROCESS context, the other for
+ * NMI context (optionally).
+ */
+#define GHES_IOREMAP_PAGES           2
+#define GHES_IOREMAP_IRQ_PAGE(base)	(base)
+#define GHES_IOREMAP_NMI_PAGE(base)	((base) + PAGE_SIZE)
+
+/* virtual memory area for atomic ioremap */
+static struct vm_struct *ghes_ioremap_area;
+/*
+ * These 2 spinlock is used to prevent atomic ioremap virtual memory
+ * area from being mapped simultaneously.
  */
 static DEFINE_RAW_SPINLOCK(ghes_ioremap_lock_nmi);
 static DEFINE_SPINLOCK(ghes_ioremap_lock_irq);
@@ -128,38 +140,71 @@ static atomic_t ghes_estatus_cache_alloced;
 
 static int ghes_panic_timeout __read_mostly = 30;
 
+static int ghes_ioremap_init(void)
+{
+	ghes_ioremap_area = __get_vm_area(PAGE_SIZE * GHES_IOREMAP_PAGES,
+		VM_IOREMAP, VMALLOC_START, VMALLOC_END);
+	if (!ghes_ioremap_area) {
+		pr_err(GHES_PFX "Failed to allocate virtual memory area for atomic ioremap.\n");
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void ghes_ioremap_exit(void)
+{
+	free_vm_area(ghes_ioremap_area);
+}
+
 static void __iomem *ghes_ioremap_pfn_nmi(u64 pfn)
 {
+	unsigned long vaddr;
 	phys_addr_t paddr;
 	pgprot_t prot;
 
+	vaddr = (unsigned long)GHES_IOREMAP_NMI_PAGE(ghes_ioremap_area->addr);
+
 	paddr = pfn << PAGE_SHIFT;
 	prot = arch_apei_get_mem_attribute(paddr);
-	__set_fixmap(FIX_APEI_GHES_NMI, paddr, prot);
+	ioremap_page_range(vaddr, vaddr + PAGE_SIZE, paddr, prot);
 
-	return (void __iomem *) fix_to_virt(FIX_APEI_GHES_NMI);
+	return (void __iomem *)vaddr;
 }
 
 static void __iomem *ghes_ioremap_pfn_irq(u64 pfn)
 {
-	phys_addr_t paddr;
+	unsigned long vaddr, paddr;
 	pgprot_t prot;
+
+	vaddr = (unsigned long)GHES_IOREMAP_IRQ_PAGE(ghes_ioremap_area->addr);
 
 	paddr = pfn << PAGE_SHIFT;
 	prot = arch_apei_get_mem_attribute(paddr);
-	__set_fixmap(FIX_APEI_GHES_IRQ, paddr, prot);
 
-	return (void __iomem *) fix_to_virt(FIX_APEI_GHES_IRQ);
+	ioremap_page_range(vaddr, vaddr + PAGE_SIZE, paddr, prot);
+
+	return (void __iomem *)vaddr;
 }
 
-static void ghes_iounmap_nmi(void)
+static void ghes_iounmap_nmi(void __iomem *vaddr_ptr)
 {
-	clear_fixmap(FIX_APEI_GHES_NMI);
+	unsigned long vaddr = (unsigned long __force)vaddr_ptr;
+	void *base = ghes_ioremap_area->addr;
+
+	BUG_ON(vaddr != (unsigned long)GHES_IOREMAP_NMI_PAGE(base));
+	unmap_kernel_range_noflush(vaddr, PAGE_SIZE);
+	arch_apei_flush_tlb_one(vaddr);
 }
 
-static void ghes_iounmap_irq(void)
+static void ghes_iounmap_irq(void __iomem *vaddr_ptr)
 {
-	clear_fixmap(FIX_APEI_GHES_IRQ);
+	unsigned long vaddr = (unsigned long __force)vaddr_ptr;
+	void *base = ghes_ioremap_area->addr;
+
+	BUG_ON(vaddr != (unsigned long)GHES_IOREMAP_IRQ_PAGE(base));
+	unmap_kernel_range_noflush(vaddr, PAGE_SIZE);
+	arch_apei_flush_tlb_one(vaddr);
 }
 
 static int ghes_estatus_pool_init(void)
@@ -170,40 +215,40 @@ static int ghes_estatus_pool_init(void)
 	return 0;
 }
 
-static void ghes_estatus_pool_free_chunk(struct gen_pool *pool,
+static void ghes_estatus_pool_free_chunk_page(struct gen_pool *pool,
 					      struct gen_pool_chunk *chunk,
 					      void *data)
 {
-	vfree((void *)chunk->start_addr);
+	free_page(chunk->start_addr);
 }
 
 static void ghes_estatus_pool_exit(void)
 {
 	gen_pool_for_each_chunk(ghes_estatus_pool,
-				ghes_estatus_pool_free_chunk, NULL);
+				ghes_estatus_pool_free_chunk_page, NULL);
 	gen_pool_destroy(ghes_estatus_pool);
 }
 
 static int ghes_estatus_pool_expand(unsigned long len)
 {
-	unsigned long size, addr;
+	unsigned long i, pages, size, addr;
+	int ret;
 
 	ghes_estatus_pool_size_request += PAGE_ALIGN(len);
 	size = gen_pool_size(ghes_estatus_pool);
 	if (size >= ghes_estatus_pool_size_request)
 		return 0;
+	pages = (ghes_estatus_pool_size_request - size) / PAGE_SIZE;
+	for (i = 0; i < pages; i++) {
+		addr = __get_free_page(GFP_KERNEL);
+		if (!addr)
+			return -ENOMEM;
+		ret = gen_pool_add(ghes_estatus_pool, addr, PAGE_SIZE, -1);
+		if (ret)
+			return ret;
+	}
 
-	addr = (unsigned long)vmalloc(PAGE_ALIGN(len));
-	if (!addr)
-		return -ENOMEM;
-
-	/*
-	 * New allocation must be visible in all pgd before it can be found by
-	 * an NMI allocating from the pool.
-	 */
-	vmalloc_sync_mappings();
-
-	return gen_pool_add(ghes_estatus_pool, addr, PAGE_ALIGN(len), -1);
+	return 0;
 }
 
 static int map_gen_v2(struct ghes *ghes)
@@ -315,10 +360,10 @@ static void ghes_copy_tofrom_phys(void *buffer, u64 paddr, u32 len,
 		paddr += trunk;
 		buffer += trunk;
 		if (in_nmi) {
-			ghes_iounmap_nmi();
+			ghes_iounmap_nmi(vaddr);
 			raw_spin_unlock(&ghes_ioremap_lock_nmi);
 		} else {
-			ghes_iounmap_irq();
+			ghes_iounmap_irq(vaddr);
 			spin_unlock_irqrestore(&ghes_ioremap_lock_irq, flags);
 		}
 	}
@@ -674,8 +719,6 @@ static void __ghes_panic(struct ghes *ghes)
 {
 	__ghes_print_estatus(KERN_EMERG, ghes->generic, ghes->estatus);
 
-	ghes_clear_estatus(ghes);
-
 	/* reboot to log the error! */
 	if (!panic_timeout)
 		panic_timeout = ghes_panic_timeout;
@@ -808,8 +851,17 @@ static void ghes_sea_remove(struct ghes *ghes)
 	synchronize_rcu();
 }
 #else /* CONFIG_ACPI_APEI_SEA */
-static inline void ghes_sea_add(struct ghes *ghes) { }
-static inline void ghes_sea_remove(struct ghes *ghes) { }
+static inline void ghes_sea_add(struct ghes *ghes)
+{
+	pr_err(GHES_PFX "ID: %d, trying to add SEA notification which is not supported\n",
+	       ghes->generic->header.source_id);
+}
+
+static inline void ghes_sea_remove(struct ghes *ghes)
+{
+	pr_err(GHES_PFX "ID: %d, trying to remove SEA notification which is not supported\n",
+	       ghes->generic->header.source_id);
+}
 #endif /* CONFIG_ACPI_APEI_SEA */
 
 #ifdef CONFIG_HAVE_ACPI_APEI_NMI
@@ -935,6 +987,7 @@ static int ghes_notify_nmi(unsigned int cmd, struct pt_regs *regs)
 
 		sev = ghes_severity(ghes->estatus->error_severity);
 		if (sev >= GHES_SEV_PANIC) {
+			oops_begin();
 			ghes_print_queued_estatus();
 			__ghes_panic(ghes);
 		}
@@ -1010,9 +1063,23 @@ static void ghes_nmi_init_cxt(void)
 	init_irq_work(&ghes_proc_irq_work, ghes_proc_in_irq);
 }
 #else /* CONFIG_HAVE_ACPI_APEI_NMI */
-static inline void ghes_nmi_add(struct ghes *ghes) { }
-static inline void ghes_nmi_remove(struct ghes *ghes) { }
-static inline void ghes_nmi_init_cxt(void) { }
+static inline void ghes_nmi_add(struct ghes *ghes)
+{
+	pr_err(GHES_PFX "ID: %d, trying to add NMI notification which is not supported!\n",
+	       ghes->generic->header.source_id);
+	BUG();
+}
+
+static inline void ghes_nmi_remove(struct ghes *ghes)
+{
+	pr_err(GHES_PFX "ID: %d, trying to remove NMI notification which is not supported!\n",
+	       ghes->generic->header.source_id);
+	BUG();
+}
+
+static inline void ghes_nmi_init_cxt(void)
+{
+}
 #endif /* CONFIG_HAVE_ACPI_APEI_NMI */
 
 static int ghes_probe(struct platform_device *ghes_dev)
@@ -1218,9 +1285,13 @@ static int __init ghes_init(void)
 
 	ghes_nmi_init_cxt();
 
-	rc = ghes_estatus_pool_init();
+	rc = ghes_ioremap_init();
 	if (rc)
 		goto err;
+
+	rc = ghes_estatus_pool_init();
+	if (rc)
+		goto err_ioremap_exit;
 
 	rc = ghes_estatus_pool_expand(GHES_ESTATUS_CACHE_AVG_SIZE *
 				      GHES_ESTATUS_CACHE_ALLOCED_MAX);
@@ -1244,6 +1315,8 @@ static int __init ghes_init(void)
 	return 0;
 err_pool_exit:
 	ghes_estatus_pool_exit();
+err_ioremap_exit:
+	ghes_ioremap_exit();
 err:
 	return rc;
 }

@@ -16,6 +16,7 @@ config BITREVERSE
 config HAVE_ARCH_BITREVERSE
 	bool
 	default n
+	depends on BITREVERSE
 	help
 	  This option enables the use of hardware bit-reversal instructions on
 	  architectures which support such operations.
@@ -412,10 +413,6 @@ config HAS_DMA
 	depends on !NO_DMA
 	default y
 
-config SGL_ALLOC
-	bool
-	default n
-
 config DMA_NOOP_OPS
 	bool
 	depends on HAS_DMA && (!64BIT || ARCH_DMA_ADDR_T_64BIT)
@@ -576,15 +573,6 @@ config ARCH_HAS_UACCESS_FLUSHCACHE
 config STACKDEPOT
 	bool
 	select STACKTRACE
-
-config STACK_HASH_ORDER_SHIFT
-	int "stack depot hash size (12 => 4KB, 20 => 1024KB)"
-	range 12 20
-	default 20
-	depends on STACKDEPOT
-	help
-	 Select the hash size as a power of 2 for the stackdepot hash table.
-	 Choose a lower value to reduce the memory impact.
 
 config SBITMAP
 	bool

@@ -11,7 +11,6 @@
 #include <linux/wait.h>
 #include <linux/hash.h>
 #include <linux/kthread.h>
-#include <linux/poll.h>
 
 void __init_waitqueue_head(struct wait_queue_head *wq_head, const char *name, struct lock_class_key *key)
 {
@@ -28,7 +27,7 @@ void add_wait_queue(struct wait_queue_head *wq_head, struct wait_queue_entry *wq
 
 	wq_entry->flags &= ~WQ_FLAG_EXCLUSIVE;
 	spin_lock_irqsave(&wq_head->lock, flags);
-	__add_wait_queue(wq_head, wq_entry);
+	__add_wait_queue_entry_tail(wq_head, wq_entry);
 	spin_unlock_irqrestore(&wq_head->lock, flags);
 }
 EXPORT_SYMBOL(add_wait_queue);
@@ -214,13 +213,6 @@ void __wake_up_sync(struct wait_queue_head *wq_head, unsigned int mode, int nr_e
 }
 EXPORT_SYMBOL_GPL(__wake_up_sync);	/* For internal use only */
 
-void __wake_up_pollfree(struct wait_queue_head *wq_head)
-{
-	__wake_up(wq_head, TASK_NORMAL, 0, (void *)(POLLHUP | POLLFREE));
-	/* POLLFREE must have cleared the queue. */
-	WARN_ON_ONCE(waitqueue_active(wq_head));
-}
-
 /*
  * Note: we use "set_current_state()" _after_ the wait-queue add,
  * because we need a memory barrier there on SMP, so that any
@@ -403,36 +395,35 @@ static inline bool is_kthread_should_stop(void)
  *     if (condition)
  *         break;
  *
- *     // in wait_woken()			// in woken_wake_function()
+ *     p->state = mode;				condition = true;
+ *     smp_mb(); // A				smp_wmb(); // C
+ *     if (!wq_entry->flags & WQ_FLAG_WOKEN)	wq_entry->flags |= WQ_FLAG_WOKEN;
+ *         schedule()				try_to_wake_up();
+ *     p->state = TASK_RUNNING;		    ~~~~~~~~~~~~~~~~~~
+ *     wq_entry->flags &= ~WQ_FLAG_WOKEN;		condition = true;
+ *     smp_mb() // B				smp_wmb(); // C
+ *						wq_entry->flags |= WQ_FLAG_WOKEN;
+ * }
+ * remove_wait_queue(&wq_head, &wait);
  *
- *     p->state = mode;				wq_entry->flags |= WQ_FLAG_WOKEN;
- *     smp_mb(); // A				try_to_wake_up():
- *     if (!(wq_entry->flags & WQ_FLAG_WOKEN))	   <full barrier>
- *         schedule()				   if (p->state & mode)
- *     p->state = TASK_RUNNING;			      p->state = TASK_RUNNING;
- *     wq_entry->flags &= ~WQ_FLAG_WOKEN;	~~~~~~~~~~~~~~~~~~
- *     smp_mb(); // B				condition = true;
- * }						smp_mb(); // C
- * remove_wait_queue(&wq_head, &wait);		wq_entry->flags |= WQ_FLAG_WOKEN;
  */
 long wait_woken(struct wait_queue_entry *wq_entry, unsigned mode, long timeout)
 {
-	/*
-	 * The below executes an smp_mb(), which matches with the full barrier
-	 * executed by the try_to_wake_up() in woken_wake_function() such that
-	 * either we see the store to wq_entry->flags in woken_wake_function()
-	 * or woken_wake_function() sees our store to current->state.
-	 */
 	set_current_state(mode); /* A */
+	/*
+	 * The above implies an smp_mb(), which matches with the smp_wmb() from
+	 * woken_wake_function() such that if we observe WQ_FLAG_WOKEN we must
+	 * also observe all state before the wakeup.
+	 */
 	if (!(wq_entry->flags & WQ_FLAG_WOKEN) && !is_kthread_should_stop())
 		timeout = schedule_timeout(timeout);
 	__set_current_state(TASK_RUNNING);
 
 	/*
-	 * The below executes an smp_mb(), which matches with the smp_mb() (C)
-	 * in woken_wake_function() such that either we see the wait condition
-	 * being true or the store to wq_entry->flags in woken_wake_function()
-	 * follows ours in the coherence order.
+	 * The below implies an smp_mb(), it too pairs with the smp_wmb() from
+	 * woken_wake_function() such that we must either observe the wait
+	 * condition being true _OR_ WQ_FLAG_WOKEN such that we will not miss
+	 * an event.
 	 */
 	smp_store_mb(wq_entry->flags, wq_entry->flags & ~WQ_FLAG_WOKEN); /* B */
 
@@ -442,8 +433,14 @@ EXPORT_SYMBOL(wait_woken);
 
 int woken_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, int sync, void *key)
 {
-	/* Pairs with the smp_store_mb() in wait_woken(). */
-	smp_mb(); /* C */
+	/*
+	 * Although this function is called under waitqueue lock, LOCK
+	 * doesn't imply write barrier and the users expects write
+	 * barrier semantics on wakeup functions.  The following
+	 * smp_wmb() is equivalent to smp_wmb() in try_to_wake_up()
+	 * and is paired with smp_store_mb() in wait_woken().
+	 */
+	smp_wmb(); /* C */
 	wq_entry->flags |= WQ_FLAG_WOKEN;
 
 	return default_wake_function(wq_entry, mode, sync, key);

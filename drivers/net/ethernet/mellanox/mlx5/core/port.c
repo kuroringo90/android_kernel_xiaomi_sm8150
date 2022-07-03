@@ -392,6 +392,10 @@ int mlx5_query_module_eeprom(struct mlx5_core_dev *dev,
 		size -= offset + size - MLX5_EEPROM_PAGE_LENGTH;
 
 	i2c_addr = MLX5_I2C_ADDR_LOW;
+	if (offset >= MLX5_EEPROM_PAGE_LENGTH) {
+		i2c_addr = MLX5_I2C_ADDR_HIGH;
+		offset -= MLX5_EEPROM_PAGE_LENGTH;
+	}
 
 	MLX5_SET(mcia_reg, in, l, 0);
 	MLX5_SET(mcia_reg, in, module, module_num);
@@ -637,7 +641,7 @@ EXPORT_SYMBOL_GPL(mlx5_query_port_prio_tc);
 static int mlx5_set_port_qetcr_reg(struct mlx5_core_dev *mdev, u32 *in,
 				   int inlen)
 {
-	u32 out[MLX5_ST_SZ_DW(qetc_reg)];
+	u32 out[MLX5_ST_SZ_DW(qtct_reg)];
 
 	if (!MLX5_CAP_GEN(mdev, ets))
 		return -EOPNOTSUPP;
@@ -649,7 +653,7 @@ static int mlx5_set_port_qetcr_reg(struct mlx5_core_dev *mdev, u32 *in,
 static int mlx5_query_port_qetcr_reg(struct mlx5_core_dev *mdev, u32 *out,
 				     int outlen)
 {
-	u32 in[MLX5_ST_SZ_DW(qetc_reg)];
+	u32 in[MLX5_ST_SZ_DW(qtct_reg)];
 
 	if (!MLX5_CAP_GEN(mdev, ets))
 		return -EOPNOTSUPP;

@@ -11,7 +11,6 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/interrupt.h>
-#include <linux/irq.h>
 #include <linux/seq_file.h>
 #include <linux/delay.h>
 #include <linux/ftrace.h>
@@ -26,18 +25,9 @@ int sysctl_panic_on_stackoverflow;
 /*
  * Probabilistic stack overflow check:
  *
- * Regular device interrupts can enter on the following stacks:
- *
- * - User stack
- *
- * - Kernel task stack
- *
- * - Interrupt stack if a device driver reenables interrupts
- *   which should only happen in really old drivers.
- *
- * - Debug IST stack
- *
- * All other contexts are invalid.
+ * Only check the stack in process context, because everything else
+ * runs on the big interrupt stacks. Checking reliably is too expensive,
+ * so we just check from interrupts.
  */
 static inline void stack_overflow_check(struct pt_regs *regs)
 {
@@ -62,15 +52,15 @@ static inline void stack_overflow_check(struct pt_regs *regs)
 		return;
 
 	oist = this_cpu_ptr(&orig_ist);
-	estack_bottom = (u64)oist->ist[DEBUG_STACK];
-	estack_top = estack_bottom - DEBUG_STKSZ + STACK_TOP_MARGIN;
+	estack_top = (u64)oist->ist[0] - EXCEPTION_STKSZ + STACK_TOP_MARGIN;
+	estack_bottom = (u64)oist->ist[N_EXCEPTION_STACKS - 1];
 	if (regs->sp >= estack_top && regs->sp <= estack_bottom)
 		return;
 
-	WARN_ONCE(1, "do_IRQ(): %s has overflown the kernel stack (cur:%Lx,sp:%lx,irq stk top-bottom:%Lx-%Lx,exception stk top-bottom:%Lx-%Lx,ip:%pF)\n",
+	WARN_ONCE(1, "do_IRQ(): %s has overflown the kernel stack (cur:%Lx,sp:%lx,irq stk top-bottom:%Lx-%Lx,exception stk top-bottom:%Lx-%Lx)\n",
 		current->comm, curbase, regs->sp,
 		irq_stack_top, irq_stack_bottom,
-		estack_top, estack_bottom, (void *)regs->ip);
+		estack_top, estack_bottom);
 
 	if (sysctl_panic_on_stackoverflow)
 		panic("low stack detected by irq handler - check messages\n");

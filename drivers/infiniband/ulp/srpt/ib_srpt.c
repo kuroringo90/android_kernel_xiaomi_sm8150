@@ -80,7 +80,7 @@ module_param(srpt_srq_size, int, 0444);
 MODULE_PARM_DESC(srpt_srq_size,
 		 "Shared receive queue (SRQ) size.");
 
-static int srpt_get_u64_x(char *buffer, const struct kernel_param *kp)
+static int srpt_get_u64_x(char *buffer, struct kernel_param *kp)
 {
 	return sprintf(buffer, "0x%016llx", *(u64 *)kp->arg);
 }
@@ -787,17 +787,13 @@ static int srpt_post_recv(struct srpt_device *sdev,
  */
 static int srpt_zerolength_write(struct srpt_rdma_ch *ch)
 {
-	struct ib_send_wr *bad_wr;
-	struct ib_rdma_wr wr = {
-		.wr = {
-			.next		= NULL,
-			{ .wr_cqe	= &ch->zw_cqe, },
-			.opcode		= IB_WR_RDMA_WRITE,
-			.send_flags	= IB_SEND_SIGNALED,
-		}
-	};
+	struct ib_send_wr wr, *bad_wr;
 
-	return ib_post_send(ch->qp, &wr.wr, &bad_wr);
+	memset(&wr, 0, sizeof(wr));
+	wr.opcode = IB_WR_RDMA_WRITE;
+	wr.wr_cqe = &ch->zw_cqe;
+	wr.send_flags = IB_SEND_SIGNALED;
+	return ib_post_send(ch->qp, &wr, &bad_wr);
 }
 
 static void srpt_zerolength_write_done(struct ib_cq *cq, struct ib_wc *wc)
@@ -1004,7 +1000,8 @@ static int srpt_init_ch_qp(struct srpt_rdma_ch *ch, struct ib_qp *qp)
 		return -ENOMEM;
 
 	attr->qp_state = IB_QPS_INIT;
-	attr->qp_access_flags = IB_ACCESS_LOCAL_WRITE;
+	attr->qp_access_flags = IB_ACCESS_LOCAL_WRITE | IB_ACCESS_REMOTE_READ |
+	    IB_ACCESS_REMOTE_WRITE;
 	attr->port_num = ch->sport->port;
 	attr->pkey_index = 0;
 
@@ -1246,11 +1243,9 @@ static int srpt_build_cmd_rsp(struct srpt_rdma_ch *ch,
 			      struct srpt_send_ioctx *ioctx, u64 tag,
 			      int status)
 {
-	struct se_cmd *cmd = &ioctx->cmd;
 	struct srp_rsp *srp_rsp;
 	const u8 *sense_data;
 	int sense_data_len, max_sense_len;
-	u32 resid = cmd->residual_count;
 
 	/*
 	 * The lowest bit of all SAM-3 status codes is zero (see also
@@ -1271,28 +1266,6 @@ static int srpt_build_cmd_rsp(struct srpt_rdma_ch *ch,
 		cpu_to_be32(1 + atomic_xchg(&ch->req_lim_delta, 0));
 	srp_rsp->tag = tag;
 	srp_rsp->status = status;
-
-	if (cmd->se_cmd_flags & SCF_UNDERFLOW_BIT) {
-		if (cmd->data_direction == DMA_TO_DEVICE) {
-			/* residual data from an underflow write */
-			srp_rsp->flags = SRP_RSP_FLAG_DOUNDER;
-			srp_rsp->data_out_res_cnt = cpu_to_be32(resid);
-		} else if (cmd->data_direction == DMA_FROM_DEVICE) {
-			/* residual data from an underflow read */
-			srp_rsp->flags = SRP_RSP_FLAG_DIUNDER;
-			srp_rsp->data_in_res_cnt = cpu_to_be32(resid);
-		}
-	} else if (cmd->se_cmd_flags & SCF_OVERFLOW_BIT) {
-		if (cmd->data_direction == DMA_TO_DEVICE) {
-			/* residual data from an overflow write */
-			srp_rsp->flags = SRP_RSP_FLAG_DOOVER;
-			srp_rsp->data_out_res_cnt = cpu_to_be32(resid);
-		} else if (cmd->data_direction == DMA_FROM_DEVICE) {
-			/* residual data from an overflow read */
-			srp_rsp->flags = SRP_RSP_FLAG_DIOVER;
-			srp_rsp->data_in_res_cnt = cpu_to_be32(resid);
-		}
-	}
 
 	if (sense_data_len) {
 		BUILD_BUG_ON(MIN_MAX_RSP_SIZE <= sizeof(*srp_rsp));
@@ -1737,7 +1710,8 @@ static bool srpt_close_ch(struct srpt_rdma_ch *ch)
 	int ret;
 
 	if (!srpt_set_ch_state(ch, CH_DRAINING)) {
-		pr_debug("%s: already closed\n", ch->sess_name);
+		pr_debug("%s-%d: already closed\n", ch->sess_name,
+			 ch->qp->qp_num);
 		return false;
 	}
 
@@ -1799,8 +1773,8 @@ static void __srpt_close_all_ch(struct srpt_device *sdev)
 
 	list_for_each_entry(ch, &sdev->rch_list, list) {
 		if (srpt_disconnect_ch(ch) >= 0)
-			pr_info("Closing channel %s because target %s has been disabled\n",
-				ch->sess_name,
+			pr_info("Closing channel %s-%d because target %s has been disabled\n",
+				ch->sess_name, ch->qp->qp_num,
 				sdev->device->name);
 		srpt_close_ch(ch);
 	}
@@ -2018,7 +1992,7 @@ static int srpt_cm_req_recv(struct ib_cm_id *cm_id,
 		goto destroy_ib;
 	}
 
-	guid = (__be16 *)&param->primary_path->dgid.global.interface_id;
+	guid = (__be16 *)&param->primary_path->sgid.global.interface_id;
 	snprintf(ch->ini_guid, sizeof(ch->ini_guid), "%04x:%04x:%04x:%04x",
 		 be16_to_cpu(guid[0]), be16_to_cpu(guid[1]),
 		 be16_to_cpu(guid[2]), be16_to_cpu(guid[3]));
@@ -2405,19 +2379,8 @@ static void srpt_queue_tm_rsp(struct se_cmd *cmd)
 	srpt_queue_response(cmd);
 }
 
-/*
- * This function is called for aborted commands if no response is sent to the
- * initiator. Make sure that the credits freed by aborting a command are
- * returned to the initiator the next time a response is sent by incrementing
- * ch->req_lim_delta.
- */
 static void srpt_aborted_task(struct se_cmd *cmd)
 {
-	struct srpt_send_ioctx *ioctx = container_of(cmd,
-				struct srpt_send_ioctx, cmd);
-	struct srpt_rdma_ch *ch = ioctx->ch;
-
-	atomic_inc(&ch->req_lim_delta);
 }
 
 static int srpt_queue_status(struct se_cmd *cmd)

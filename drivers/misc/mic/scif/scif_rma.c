@@ -417,7 +417,7 @@ static int scif_create_remote_lookup(struct scif_dev *remote_dev,
 		if (err)
 			goto error_window;
 		err = scif_map_page(&window->num_pages_lookup.lookup[j],
-				    vmalloc_num_pages ?
+				    vmalloc_dma_phys ?
 				    vmalloc_to_page(&window->num_pages[i]) :
 				    virt_to_page(&window->num_pages[i]),
 				    remote_dev);
@@ -1404,8 +1404,6 @@ retry:
 				NULL);
 		up_write(&mm->mmap_sem);
 		if (nr_pages != pinned_pages->nr_pages) {
-			if (pinned_pages->nr_pages < 0)
-				pinned_pages->nr_pages = 0;
 			if (try_upgrade) {
 				if (ulimit)
 					__scif_dec_pinned_vm_lock(mm,
@@ -1426,6 +1424,7 @@ retry:
 
 	if (pinned_pages->nr_pages < nr_pages) {
 		err = -EFAULT;
+		pinned_pages->nr_pages = nr_pages;
 		goto dec_pinned;
 	}
 
@@ -1438,6 +1437,7 @@ dec_pinned:
 		__scif_dec_pinned_vm_lock(mm, nr_pages, 0);
 	/* Something went wrong! Rollback */
 error_unmap:
+	pinned_pages->nr_pages = nr_pages;
 	scif_destroy_pinned_pages(pinned_pages);
 	*pages = NULL;
 	dev_dbg(scif_info.mdev.this_device,

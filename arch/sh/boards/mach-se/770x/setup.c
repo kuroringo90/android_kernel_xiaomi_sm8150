@@ -9,7 +9,6 @@
  */
 #include <linux/init.h>
 #include <linux/platform_device.h>
-#include <linux/sh_eth.h>
 #include <mach-se/mach/se.h>
 #include <mach-se/mach/mrshpc.h>
 #include <asm/machvec.h>
@@ -116,11 +115,6 @@ static struct platform_device heartbeat_device = {
 #if defined(CONFIG_CPU_SUBTYPE_SH7710) ||\
 	defined(CONFIG_CPU_SUBTYPE_SH7712)
 /* SH771X Ethernet driver */
-static struct sh_eth_plat_data sh_eth_plat = {
-	.phy = PHY_ID,
-	.phy_interface = PHY_INTERFACE_MODE_MII,
-};
-
 static struct resource sh_eth0_resources[] = {
 	[0] = {
 		.start = SH_ETH0_BASE,
@@ -138,7 +132,7 @@ static struct platform_device sh_eth0_device = {
 	.name = "sh771x-ether",
 	.id = 0,
 	.dev = {
-		.platform_data = &sh_eth_plat,
+		.platform_data = PHY_ID,
 	},
 	.num_resources = ARRAY_SIZE(sh_eth0_resources),
 	.resource = sh_eth0_resources,
@@ -161,7 +155,7 @@ static struct platform_device sh_eth1_device = {
 	.name = "sh771x-ether",
 	.id = 1,
 	.dev = {
-		.platform_data = &sh_eth_plat,
+		.platform_data = PHY_ID,
 	},
 	.num_resources = ARRAY_SIZE(sh_eth1_resources),
 	.resource = sh_eth1_resources,

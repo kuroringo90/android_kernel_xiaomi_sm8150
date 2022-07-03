@@ -25,11 +25,9 @@
 #include <linux/time.h>
 #include <linux/mutex.h>
 #include <linux/device.h>
-#include <linux/nospec.h>
 #include <sound/core.h>
 #include <sound/minors.h>
 #include <sound/pcm.h>
-#include <sound/timer.h>
 #include <sound/control.h>
 #include <sound/info.h>
 
@@ -130,7 +128,6 @@ static int snd_pcm_control_ioctl(struct snd_card *card,
 				return -EFAULT;
 			if (stream < 0 || stream > 1)
 				return -EINVAL;
-			stream = array_index_nospec(stream, 2);
 			if (get_user(subdevice, &info->subdevice))
 				return -EFAULT;
 			mutex_lock(&register_mutex);
@@ -759,7 +756,6 @@ int snd_pcm_new_stream(struct snd_pcm *pcm, int stream, int substream_count)
 		}
 		substream->group = &substream->self_group;
 		spin_lock_init(&substream->self_group.lock);
-		spin_lock_init(&substream->runtime_lock);
 		mutex_init(&substream->self_group.mutex);
 		INIT_LIST_HEAD(&substream->self_group.substreams);
 		list_add_tail(&substream->link_list, &substream->self_group.substreams);
@@ -876,20 +872,8 @@ EXPORT_SYMBOL(snd_pcm_new_internal);
 static void free_chmap(struct snd_pcm_str *pstr)
 {
 	if (pstr->chmap_kctl) {
-		struct snd_card *card = pstr->pcm->card;
-
-		down_write(&card->controls_rwsem);
-		snd_ctl_remove(card, pstr->chmap_kctl);
-		up_write(&card->controls_rwsem);
+		snd_ctl_remove(pstr->pcm->card, pstr->chmap_kctl);
 		pstr->chmap_kctl = NULL;
-	}
-	if (pstr->vol_kctl) {
-		snd_ctl_remove(pstr->pcm->card, pstr->vol_kctl);
-		pstr->vol_kctl = NULL;
-	}
-	if (pstr->usr_kctl) {
-		snd_ctl_remove(pstr->pcm->card, pstr->usr_kctl);
-		pstr->usr_kctl = NULL;
 	}
 }
 
@@ -1041,8 +1025,6 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 	init_waitqueue_head(&runtime->tsleep);
 
 	runtime->status->state = SNDRV_PCM_STATE_OPEN;
-	mutex_init(&runtime->buffer_mutex);
-	atomic_set(&runtime->buffer_accessing, 0);
 
 	substream->runtime = runtime;
 	substream->private_data = pcm->private_data;
@@ -1057,11 +1039,9 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 void snd_pcm_detach_substream(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime;
-	unsigned long flags = 0;
 
 	if (PCM_RUNTIME_CHECK(substream))
 		return;
-	spin_lock_irqsave(&substream->runtime_lock, flags);
 	runtime = substream->runtime;
 	if (runtime->private_free != NULL)
 		runtime->private_free(runtime);
@@ -1070,18 +1050,11 @@ void snd_pcm_detach_substream(struct snd_pcm_substream *substream)
 	snd_free_pages((void*)runtime->control,
 		       PAGE_ALIGN(sizeof(struct snd_pcm_mmap_control)));
 	kfree(runtime->hw_constraints.rules);
-	/* Avoid concurrent access to runtime via PCM timer interface */
-	if (substream->timer)
-		spin_lock_irq(&substream->timer->lock);
-	substream->runtime = NULL;
-	if (substream->timer)
-		spin_unlock_irq(&substream->timer->lock);
-	mutex_destroy(&runtime->buffer_mutex);
 	kfree(runtime);
+	substream->runtime = NULL;
 	put_pid(substream->pid);
 	substream->pid = NULL;
 	substream->pstr->substream_opened--;
-	spin_unlock_irqrestore(&substream->runtime_lock, flags);
 }
 
 static ssize_t show_pcm_class(struct device *dev,

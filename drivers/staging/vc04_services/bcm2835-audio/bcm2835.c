@@ -36,10 +36,6 @@ MODULE_PARM_DESC(enable_compat_alsa,
 static void snd_devm_unregister_child(struct device *dev, void *res)
 {
 	struct device *childdev = *(struct device **)res;
-	struct bcm2835_chip *chip = dev_get_drvdata(childdev);
-	struct snd_card *card = chip->card;
-
-	snd_card_free(card);
 
 	device_unregister(childdev);
 }
@@ -65,13 +61,6 @@ static int snd_devm_add_child(struct device *dev, struct device *child)
 	return 0;
 }
 
-static void snd_bcm2835_release(struct device *dev)
-{
-	struct bcm2835_chip *chip = dev_get_drvdata(dev);
-
-	kfree(chip);
-}
-
 static struct device *
 snd_create_device(struct device *parent,
 		  struct device_driver *driver,
@@ -87,7 +76,6 @@ snd_create_device(struct device *parent,
 	device_initialize(device);
 	device->parent = parent;
 	device->driver = driver;
-	device->release = snd_bcm2835_release;
 
 	dev_set_name(device, "%s", name);
 
@@ -98,19 +86,18 @@ snd_create_device(struct device *parent,
 	return device;
 }
 
+static int snd_bcm2835_free(struct bcm2835_chip *chip)
+{
+	kfree(chip);
+	return 0;
+}
+
 /* component-destructor
  * (see "Management of Cards and Components")
  */
 static int snd_bcm2835_dev_free(struct snd_device *device)
 {
-	struct bcm2835_chip *chip = device->device_data;
-	struct snd_card *card = chip->card;
-
-	/* TODO: free pcm, ctl */
-
-	snd_device_free(card, chip);
-
-	return 0;
+	return snd_bcm2835_free(device->device_data);
 }
 
 /* chip-specific constructor
@@ -135,7 +122,7 @@ static int snd_bcm2835_create(struct snd_card *card,
 
 	err = snd_device_new(card, SNDRV_DEV_LOWLEVEL, chip, &ops);
 	if (err) {
-		kfree(chip);
+		snd_bcm2835_free(chip);
 		return err;
 	}
 
@@ -143,14 +130,31 @@ static int snd_bcm2835_create(struct snd_card *card,
 	return 0;
 }
 
-static struct snd_card *snd_bcm2835_card_new(struct device *dev)
+static void snd_devm_card_free(struct device *dev, void *res)
 {
+	struct snd_card *snd_card = *(struct snd_card **)res;
+
+	snd_card_free(snd_card);
+}
+
+static struct snd_card *snd_devm_card_new(struct device *dev)
+{
+	struct snd_card **dr;
 	struct snd_card *card;
 	int ret;
 
+	dr = devres_alloc(snd_devm_card_free, sizeof(*dr), GFP_KERNEL);
+	if (!dr)
+		return ERR_PTR(-ENOMEM);
+
 	ret = snd_card_new(dev, -1, NULL, THIS_MODULE, 0, &card);
-	if (ret)
+	if (ret) {
+		devres_free(dr);
 		return ERR_PTR(ret);
+	}
+
+	*dr = card;
+	devres_add(dev, dr);
 
 	return card;
 }
@@ -267,7 +271,7 @@ static int snd_add_child_device(struct device *device,
 		return PTR_ERR(child);
 	}
 
-	card = snd_bcm2835_card_new(child);
+	card = snd_devm_card_new(child);
 	if (IS_ERR(card)) {
 		dev_err(child, "Failed to create card");
 		return PTR_ERR(card);
@@ -309,7 +313,7 @@ static int snd_add_child_device(struct device *device,
 		return err;
 	}
 
-	dev_set_drvdata(child, chip);
+	dev_set_drvdata(child, card);
 	dev_info(child, "card created with %d channels\n", numchans);
 
 	return 0;

@@ -66,7 +66,7 @@ void blk_rq_bio_prep(struct request_queue *q, struct request *rq,
 void blk_queue_bypass_start(struct request_queue *q);
 void blk_queue_bypass_end(struct request_queue *q);
 void __blk_queue_free_tags(struct request_queue *q);
-bool blk_freeze_queue(struct request_queue *q);
+void blk_freeze_queue(struct request_queue *q);
 
 static inline void blk_queue_enter_live(struct request_queue *q)
 {
@@ -361,7 +361,5 @@ static inline void blk_queue_bounce(struct request_queue *q, struct bio **bio)
 {
 }
 #endif /* CONFIG_BOUNCE */
-
-extern void blk_drain_queue(struct request_queue *q);
 
 #endif /* BLK_INTERNAL_H */

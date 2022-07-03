@@ -362,7 +362,7 @@ static int __write_initial_superblock(struct dm_cache_metadata *cmd)
 	disk_super->version = cpu_to_le32(cmd->version);
 	memset(disk_super->policy_name, 0, sizeof(disk_super->policy_name));
 	memset(disk_super->policy_version, 0, sizeof(disk_super->policy_version));
-	disk_super->policy_hint_size = cpu_to_le32(0);
+	disk_super->policy_hint_size = 0;
 
 	__copy_sm_root(cmd, disk_super);
 
@@ -536,16 +536,12 @@ static int __create_persistent_data_objects(struct dm_cache_metadata *cmd,
 					  CACHE_MAX_CONCURRENT_LOCKS);
 	if (IS_ERR(cmd->bm)) {
 		DMERR("could not create block manager");
-		r = PTR_ERR(cmd->bm);
-		cmd->bm = NULL;
-		return r;
+		return PTR_ERR(cmd->bm);
 	}
 
 	r = __open_or_format_metadata(cmd, may_format_device);
-	if (r) {
+	if (r)
 		dm_block_manager_destroy(cmd->bm);
-		cmd->bm = NULL;
-	}
 
 	return r;
 }
@@ -704,7 +700,6 @@ static int __commit_transaction(struct dm_cache_metadata *cmd,
 	disk_super->policy_version[0] = cpu_to_le32(cmd->policy_version[0]);
 	disk_super->policy_version[1] = cpu_to_le32(cmd->policy_version[1]);
 	disk_super->policy_version[2] = cpu_to_le32(cmd->policy_version[2]);
-	disk_super->policy_hint_size = cpu_to_le32(cmd->policy_hint_size);
 
 	disk_super->read_hits = cpu_to_le32(cmd->stats.read_hits);
 	disk_super->read_misses = cpu_to_le32(cmd->stats.read_misses);
@@ -932,10 +927,6 @@ static int blocks_are_clean_separate_dirty(struct dm_cache_metadata *cmd,
 	int r;
 	bool dirty_flag;
 	*result = true;
-
-	if (from_cblock(cmd->cache_blocks) == 0)
-		/* Nothing to do */
-		return 0;
 
 	r = dm_bitset_cursor_begin(&cmd->dirty_info, cmd->dirty_root,
 				   from_cblock(cmd->cache_blocks), &cmd->dirty_cursor);
@@ -1170,16 +1161,9 @@ static int __load_discards(struct dm_cache_metadata *cmd,
 		if (r)
 			return r;
 
-		for (b = 0; ; b++) {
+		for (b = 0; b < from_dblock(cmd->discard_nr_blocks); b++) {
 			r = fn(context, cmd->discard_block_size, to_dblock(b),
 			       dm_bitset_cursor_get_value(&c));
-			if (r)
-				break;
-
-			if (b >= (from_dblock(cmd->discard_nr_blocks) - 1))
-				break;
-
-			r = dm_bitset_cursor_next(&c);
 			if (r)
 				break;
 		}
@@ -1337,7 +1321,6 @@ static int __load_mapping_v1(struct dm_cache_metadata *cmd,
 
 	dm_oblock_t oblock;
 	unsigned flags;
-	bool dirty = true;
 
 	dm_array_cursor_get_value(mapping_cursor, (void **) &mapping_value_le);
 	memcpy(&mapping, mapping_value_le, sizeof(mapping));
@@ -1348,10 +1331,8 @@ static int __load_mapping_v1(struct dm_cache_metadata *cmd,
 			dm_array_cursor_get_value(hint_cursor, (void **) &hint_value_le);
 			memcpy(&hint, hint_value_le, sizeof(hint));
 		}
-		if (cmd->clean_when_opened)
-			dirty = flags & M_DIRTY;
 
-		r = fn(context, oblock, to_cblock(cb), dirty,
+		r = fn(context, oblock, to_cblock(cb), flags & M_DIRTY,
 		       le32_to_cpu(hint), hints_valid);
 		if (r) {
 			DMERR("policy couldn't load cache block %llu",
@@ -1379,7 +1360,7 @@ static int __load_mapping_v2(struct dm_cache_metadata *cmd,
 
 	dm_oblock_t oblock;
 	unsigned flags;
-	bool dirty = true;
+	bool dirty;
 
 	dm_array_cursor_get_value(mapping_cursor, (void **) &mapping_value_le);
 	memcpy(&mapping, mapping_value_le, sizeof(mapping));
@@ -1390,9 +1371,8 @@ static int __load_mapping_v2(struct dm_cache_metadata *cmd,
 			dm_array_cursor_get_value(hint_cursor, (void **) &hint_value_le);
 			memcpy(&hint, hint_value_le, sizeof(hint));
 		}
-		if (cmd->clean_when_opened)
-			dirty = dm_bitset_cursor_get_value(dirty_cursor);
 
+		dirty = dm_bitset_cursor_get_value(dirty_cursor);
 		r = fn(context, oblock, to_cblock(cb), dirty,
 		       le32_to_cpu(hint), hints_valid);
 		if (r) {
@@ -1469,8 +1449,8 @@ static int __load_mappings(struct dm_cache_metadata *cmd,
 		if (hints_valid) {
 			r = dm_array_cursor_next(&cmd->hint_cursor);
 			if (r) {
-				dm_array_cursor_end(&cmd->hint_cursor);
-				hints_valid = false;
+				DMERR("dm_array_cursor_next for hint failed");
+				goto out;
 			}
 		}
 

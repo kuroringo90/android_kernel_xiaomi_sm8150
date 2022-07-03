@@ -86,7 +86,6 @@ static int hv_mode;
 
 static struct {
 	u64	lpcr;
-	u64	lpcr_clear;
 	u64	hfscr;
 	u64	fscr;
 } system_registers;
@@ -116,8 +115,6 @@ static void cpufeatures_flush_tlb(void)
 
 static void __restore_cpu_cpufeatures(void)
 {
-	u64 lpcr;
-
 	/*
 	 * LPCR is restored by the power on engine already. It can be changed
 	 * after early init e.g., by radix enable, and we have no unified API
@@ -130,14 +127,11 @@ static void __restore_cpu_cpufeatures(void)
 	 * The best we can do to accommodate secondary boot and idle restore
 	 * for now is "or" LPCR with existing.
 	 */
-	lpcr = mfspr(SPRN_LPCR);
-	lpcr |= system_registers.lpcr;
-	lpcr &= ~system_registers.lpcr_clear;
-	mtspr(SPRN_LPCR, lpcr);
+
+	mtspr(SPRN_LPCR, system_registers.lpcr | mfspr(SPRN_LPCR));
 	if (hv_mode) {
 		mtspr(SPRN_LPID, 0);
 		mtspr(SPRN_HFSCR, system_registers.hfscr);
-		mtspr(SPRN_PCR, 0);
 	}
 	mtspr(SPRN_FSCR, system_registers.fscr);
 
@@ -357,9 +351,8 @@ static int __init feat_enable_mmu_hash_v3(struct dt_cpu_feature *f)
 {
 	u64 lpcr;
 
-	system_registers.lpcr_clear |= (LPCR_ISL | LPCR_UPRT | LPCR_HR);
 	lpcr = mfspr(SPRN_LPCR);
-	lpcr &= ~(LPCR_ISL | LPCR_UPRT | LPCR_HR);
+	lpcr &= ~LPCR_ISL;
 	mtspr(SPRN_LPCR, lpcr);
 
 	cur_cpu_spec->mmu_features |= MMU_FTRS_HASH_BASE;
@@ -384,14 +377,6 @@ static int __init feat_enable_mmu_radix(struct dt_cpu_feature *f)
 static int __init feat_enable_dscr(struct dt_cpu_feature *f)
 {
 	u64 lpcr;
-
-	/*
-	 * Linux relies on FSCR[DSCR] being clear, so that we can take the
-	 * facility unavailable interrupt and track the task's usage of DSCR.
-	 * See facility_unavailable_exception().
-	 * Clear the bit here so that feat_enable() doesn't set it.
-	 */
-	f->fscr_bit_nr = -1;
 
 	feat_enable(f);
 
@@ -713,10 +698,8 @@ static bool __init cpufeatures_process_feature(struct dt_cpu_feature *f)
 		m = &dt_cpu_feature_match_table[i];
 		if (!strcmp(f->name, m->name)) {
 			known = true;
-			if (m->enable(f)) {
-				cur_cpu_spec->cpu_features |= m->cpu_ftr_bit_mask;
+			if (m->enable(f))
 				break;
-			}
 
 			pr_info("not enabling: %s (disabled or unsupported by kernel)\n",
 				f->name);
@@ -724,11 +707,16 @@ static bool __init cpufeatures_process_feature(struct dt_cpu_feature *f)
 		}
 	}
 
-	if (!known && (!enable_unknown || !feat_try_enable_unknown(f))) {
-		pr_info("not enabling: %s (unknown and unsupported by kernel)\n",
-			f->name);
-		return false;
+	if (!known && enable_unknown) {
+		if (!feat_try_enable_unknown(f)) {
+			pr_info("not enabling: %s (unknown and unsupported by kernel)\n",
+				f->name);
+			return false;
+		}
 	}
+
+	if (m->cpu_ftr_bit_mask)
+		cur_cpu_spec->cpu_features |= m->cpu_ftr_bit_mask;
 
 	if (known)
 		pr_debug("enabling: %s\n", f->name);
@@ -738,45 +726,15 @@ static bool __init cpufeatures_process_feature(struct dt_cpu_feature *f)
 	return true;
 }
 
-/*
- * Handle POWER9 broadcast tlbie invalidation issue using
- * cpu feature flag.
- */
-static __init void update_tlbie_feature_flag(unsigned long pvr)
-{
-	if (PVR_VER(pvr) == PVR_POWER9) {
-		/*
-		 * Set the tlbie feature flag for anything below
-		 * Nimbus DD 2.3 and Cumulus DD 1.3
-		 */
-		if ((pvr & 0xe000) == 0) {
-			/* Nimbus */
-			if ((pvr & 0xfff) < 0x203)
-				cur_cpu_spec->cpu_features |= CPU_FTR_P9_TLBIE_STQ_BUG;
-		} else if ((pvr & 0xc000) == 0) {
-			/* Cumulus */
-			if ((pvr & 0xfff) < 0x103)
-				cur_cpu_spec->cpu_features |= CPU_FTR_P9_TLBIE_STQ_BUG;
-		} else {
-			WARN_ONCE(1, "Unknown PVR");
-			cur_cpu_spec->cpu_features |= CPU_FTR_P9_TLBIE_STQ_BUG;
-		}
-
-		cur_cpu_spec->cpu_features |= CPU_FTR_P9_TLBIE_ERAT_BUG;
-	}
-}
-
 static __init void cpufeatures_cpu_quirks(void)
 {
-	unsigned long version = mfspr(SPRN_PVR);
+	int version = mfspr(SPRN_PVR);
 
 	/*
 	 * Not all quirks can be derived from the cpufeatures device tree.
 	 */
 	if ((version & 0xffffff00) == 0x004e0100)
 		cur_cpu_spec->cpu_features |= CPU_FTR_POWER9_DD1;
-
-	update_tlbie_feature_flag(version);
 }
 
 static void __init cpufeatures_setup_finished(void)

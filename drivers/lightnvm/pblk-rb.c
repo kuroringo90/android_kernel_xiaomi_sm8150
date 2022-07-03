@@ -142,9 +142,10 @@ static void clean_wctx(struct pblk_w_ctx *w_ctx)
 {
 	int flags;
 
+try:
 	flags = READ_ONCE(w_ctx->flags);
-	WARN_ONCE(!(flags & PBLK_SUBMITTED_ENTRY),
-			"pblk: overwriting unsubmitted data\n");
+	if (!(flags & PBLK_SUBMITTED_ENTRY))
+		goto try;
 
 	/* Release flags on context. Protect from writes and reads */
 	smp_store_release(&w_ctx->flags, PBLK_WRITABLE_ENTRY);
@@ -825,8 +826,8 @@ int pblk_rb_tear_down_check(struct pblk_rb *rb)
 	}
 
 out:
-	spin_unlock_irq(&rb->s_lock);
 	spin_unlock(&rb->w_lock);
+	spin_unlock_irq(&rb->s_lock);
 
 	return ret;
 }

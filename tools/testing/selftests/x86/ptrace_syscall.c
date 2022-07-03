@@ -183,10 +183,8 @@ static void test_ptrace_syscall_restart(void)
 		if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0)
 			err(1, "PTRACE_TRACEME");
 
-		pid_t pid = getpid(), tid = syscall(SYS_gettid);
-
 		printf("\tChild will make one syscall\n");
-		syscall(SYS_tgkill, pid, tid, SIGSTOP);
+		raise(SIGSTOP);
 
 		syscall(SYS_gettid, 10, 11, 12, 13, 14, 15);
 		_exit(0);
@@ -303,11 +301,9 @@ static void test_restart_under_ptrace(void)
 		if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0)
 			err(1, "PTRACE_TRACEME");
 
-		pid_t pid = getpid(), tid = syscall(SYS_gettid);
-
 		printf("\tChild will take a nap until signaled\n");
 		setsigign(SIGUSR1, SA_RESTART);
-		syscall(SYS_tgkill, pid, tid, SIGSTOP);
+		raise(SIGSTOP);
 
 		syscall(SYS_pause, 0, 0, 0, 0, 0, 0);
 		_exit(0);
@@ -414,12 +410,8 @@ int main()
 
 #if defined(__i386__) && (!defined(__GLIBC__) || __GLIBC__ > 2 || __GLIBC_MINOR__ >= 16)
 	vsyscall32 = (void *)getauxval(AT_SYSINFO);
-	if (vsyscall32) {
-		printf("[RUN]\tCheck AT_SYSINFO return regs\n");
-		test_sys32_regs(do_full_vsyscall32);
-	} else {
-		printf("[SKIP]\tAT_SYSINFO is not available\n");
-	}
+	printf("[RUN]\tCheck AT_SYSINFO return regs\n");
+	test_sys32_regs(do_full_vsyscall32);
 #endif
 
 	test_ptrace_syscall_restart();

@@ -454,14 +454,6 @@ int vmbus_establish_gpadl(struct vmbus_channel *channel, void *kbuffer,
 	}
 	wait_for_completion(&msginfo->waitevent);
 
-	if (msginfo->response.gpadl_created.creation_status != 0) {
-		pr_err("Failed to establish GPADL: err = 0x%x\n",
-		       msginfo->response.gpadl_created.creation_status);
-
-		ret = -EDQUOT;
-		goto cleanup;
-	}
-
 	if (channel->rescind) {
 		ret = -ENODEV;
 		goto cleanup;
@@ -549,8 +541,11 @@ static void reset_channel_cb(void *arg)
 	channel->onchannel_callback = NULL;
 }
 
-void vmbus_reset_channel_cb(struct vmbus_channel *channel)
+static int vmbus_close_internal(struct vmbus_channel *channel)
 {
+	struct vmbus_channel_close_channel *msg;
+	int ret;
+
 	/*
 	 * vmbus_on_event(), running in the per-channel tasklet, can race
 	 * with vmbus_close_internal() in the case of SMP guest, e.g., when
@@ -559,29 +554,6 @@ void vmbus_reset_channel_cb(struct vmbus_channel *channel)
 	 * first.
 	 */
 	tasklet_disable(&channel->callback_event);
-
-	channel->sc_creation_callback = NULL;
-
-	/* Stop the callback asap */
-	if (channel->target_cpu != get_cpu()) {
-		put_cpu();
-		smp_call_function_single(channel->target_cpu, reset_channel_cb,
-					 channel, true);
-	} else {
-		reset_channel_cb(channel);
-		put_cpu();
-	}
-
-	/* Re-enable tasklet for use on re-open */
-	tasklet_enable(&channel->callback_event);
-}
-
-static int vmbus_close_internal(struct vmbus_channel *channel)
-{
-	struct vmbus_channel_close_channel *msg;
-	int ret;
-
-	vmbus_reset_channel_cb(channel);
 
 	/*
 	 * In case a device driver's probe() fails (e.g.,
@@ -596,6 +568,16 @@ static int vmbus_close_internal(struct vmbus_channel *channel)
 	}
 
 	channel->state = CHANNEL_OPEN_STATE;
+	channel->sc_creation_callback = NULL;
+	/* Stop callback and cancel the timer asap */
+	if (channel->target_cpu != get_cpu()) {
+		put_cpu();
+		smp_call_function_single(channel->target_cpu, reset_channel_cb,
+					 channel, true);
+	} else {
+		reset_channel_cb(channel);
+		put_cpu();
+	}
 
 	/* Send a closing message */
 
@@ -638,6 +620,8 @@ static int vmbus_close_internal(struct vmbus_channel *channel)
 		get_order(channel->ringbuffer_pagecount * PAGE_SIZE));
 
 out:
+	/* re-enable tasklet for use on re-open */
+	tasklet_enable(&channel->callback_event);
 	return ret;
 }
 

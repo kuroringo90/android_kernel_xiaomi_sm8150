@@ -338,20 +338,27 @@ static struct ib_ports_pkeys *get_new_pps(const struct ib_qp *qp,
 	if (!new_pps)
 		return NULL;
 
-	if (qp_attr_mask & IB_QP_PORT)
-		new_pps->main.port_num = qp_attr->port_num;
-	else if (qp_pps)
-		new_pps->main.port_num = qp_pps->main.port_num;
+	if (qp_attr_mask & (IB_QP_PKEY_INDEX | IB_QP_PORT)) {
+		if (!qp_pps) {
+			new_pps->main.port_num = qp_attr->port_num;
+			new_pps->main.pkey_index = qp_attr->pkey_index;
+		} else {
+			new_pps->main.port_num = (qp_attr_mask & IB_QP_PORT) ?
+						  qp_attr->port_num :
+						  qp_pps->main.port_num;
 
-	if (qp_attr_mask & IB_QP_PKEY_INDEX)
-		new_pps->main.pkey_index = qp_attr->pkey_index;
-	else if (qp_pps)
-		new_pps->main.pkey_index = qp_pps->main.pkey_index;
-
-	if (((qp_attr_mask & IB_QP_PKEY_INDEX) &&
-	     (qp_attr_mask & IB_QP_PORT)) ||
-	    (qp_pps && qp_pps->main.state != IB_PORT_PKEY_NOT_VALID))
+			new_pps->main.pkey_index =
+					(qp_attr_mask & IB_QP_PKEY_INDEX) ?
+					 qp_attr->pkey_index :
+					 qp_pps->main.pkey_index;
+		}
 		new_pps->main.state = IB_PORT_PKEY_VALID;
+	} else if (qp_pps) {
+		new_pps->main.port_num = qp_pps->main.port_num;
+		new_pps->main.pkey_index = qp_pps->main.pkey_index;
+		if (qp_pps->main.state != IB_PORT_PKEY_NOT_VALID)
+			new_pps->main.state = IB_PORT_PKEY_VALID;
+	}
 
 	if (qp_attr_mask & IB_QP_ALT_PATH) {
 		new_pps->alt.port_num = qp_attr->alt_port_num;
@@ -378,9 +385,6 @@ int ib_open_shared_qp_security(struct ib_qp *qp, struct ib_device *dev)
 
 	if (ret)
 		return ret;
-
-	if (!qp->qp_sec)
-		return 0;
 
 	mutex_lock(&real_qp->qp_sec->mutex);
 	ret = check_qp_port_pkey_settings(real_qp->qp_sec->ports_pkeys,
@@ -708,20 +712,16 @@ int ib_mad_agent_security_setup(struct ib_mad_agent *agent,
 						agent->device->name,
 						agent->port_num);
 	if (ret)
-		goto free_security;
+		return ret;
 
 	agent->lsm_nb.notifier_call = ib_mad_agent_security_change;
 	ret = register_lsm_notifier(&agent->lsm_nb);
 	if (ret)
-		goto free_security;
+		return ret;
 
 	agent->smp_allowed = true;
 	agent->lsm_nb_reg = true;
 	return 0;
-
-free_security:
-	security_ib_free_security(agent->security);
-	return ret;
 }
 
 void ib_mad_agent_security_cleanup(struct ib_mad_agent *agent)
@@ -729,10 +729,9 @@ void ib_mad_agent_security_cleanup(struct ib_mad_agent *agent)
 	if (!rdma_protocol_ib(agent->device, agent->port_num))
 		return;
 
+	security_ib_free_security(agent->security);
 	if (agent->lsm_nb_reg)
 		unregister_lsm_notifier(&agent->lsm_nb);
-
-	security_ib_free_security(agent->security);
 }
 
 int ib_mad_enforce_security(struct ib_mad_agent_private *map, u16 pkey_index)
@@ -740,11 +739,8 @@ int ib_mad_enforce_security(struct ib_mad_agent_private *map, u16 pkey_index)
 	if (!rdma_protocol_ib(map->agent.device, map->agent.port_num))
 		return 0;
 
-	if (map->agent.qp->qp_type == IB_QPT_SMI) {
-		if (!map->agent.smp_allowed)
-			return -EACCES;
-		return 0;
-	}
+	if (map->agent.qp->qp_type == IB_QPT_SMI && !map->agent.smp_allowed)
+		return -EACCES;
 
 	return ib_security_pkey_access(map->agent.device,
 				       map->agent.port_num,

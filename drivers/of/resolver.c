@@ -22,6 +22,9 @@
 
 #include "of_private.h"
 
+/* illegal phandle value (set when unresolved) */
+#define OF_PHANDLE_ILLEGAL	0xdeadbeef
+
 static phandle live_tree_max_phandle(void)
 {
 	struct device_node *node;
@@ -123,11 +126,6 @@ static int update_usages_of_a_phandle_reference(struct device_node *overlay,
 
 		if (!prop) {
 			err = -ENOENT;
-			goto err_fail;
-		}
-
-		if (offset < 0 || offset + sizeof(__be32) > prop->length) {
-			err = -EINVAL;
 			goto err_fail;
 		}
 

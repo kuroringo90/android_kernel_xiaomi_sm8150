@@ -3,5 +3,4 @@ zImage
 xipImage
 bootpImage
 uImage
-Image-dtb-hdr
-Image-dtb
+*.dtb

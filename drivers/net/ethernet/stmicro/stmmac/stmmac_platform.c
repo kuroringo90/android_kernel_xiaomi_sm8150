@@ -67,7 +67,7 @@ static int dwmac1000_validate_mcast_bins(int mcast_bins)
  * Description:
  * This function validates the number of Unicast address entries supported
  * by a particular Synopsys 10/100/1000 controller. The Synopsys controller
- * supports 1..32, 64, or 128 Unicast filter entries for it's Unicast filter
+ * supports 1, 32, 64, or 128 Unicast filter entries for it's Unicast filter
  * logic. This function validates a valid, supported configuration is
  * selected, and defaults to 1 Unicast address if an unsupported
  * configuration is selected.
@@ -77,7 +77,8 @@ static int dwmac1000_validate_ucast_entries(int ucast_entries)
 	int x = ucast_entries;
 
 	switch (x) {
-	case 1 ... 32:
+	case 1:
+	case 32:
 	case 64:
 	case 128:
 		break;
@@ -388,9 +389,8 @@ stmmac_probe_config_dt(struct platform_device *pdev, const char **mac)
 	plat->interface = of_get_phy_mode(np);
 
 	/* Get max speed of operation from device tree */
-	of_property_read_u32(np, "max-speed", &plat->max_speed);
-
-	plat->crc_strip_en = of_property_read_bool(np, "snps,crc_strip");
+	if (of_property_read_u32(np, "max-speed", &plat->max_speed))
+		plat->max_speed = -1;
 
 	plat->bus_id = of_alias_get_id(np, "ethernet");
 	if (plat->bus_id < 0)
@@ -399,9 +399,6 @@ stmmac_probe_config_dt(struct platform_device *pdev, const char **mac)
 	/* Default to phy auto-detection */
 	plat->phy_addr = -1;
 
-	/* Flag for mac2mac feature support*/
-	plat->mac2mac_en = of_property_read_bool(np, "mac2mac");
-
 	/* "snps,phy-addr" is not a standard property. Mark it as deprecated
 	 * and warn of its use. Remove this when phy node support is added.
 	 */
@@ -409,10 +406,8 @@ stmmac_probe_config_dt(struct platform_device *pdev, const char **mac)
 		dev_warn(&pdev->dev, "snps,phy-addr property is deprecated\n");
 
 	/* To Configure PHY by using all device-tree supported properties */
-	if (!plat->mac2mac_en) {
-		if (stmmac_dt_phy(plat, np, &pdev->dev))
-			return ERR_PTR(-ENODEV);
-	}
+	if (stmmac_dt_phy(plat, np, &pdev->dev))
+		return ERR_PTR(-ENODEV);
 
 	of_property_read_u32(np, "tx-fifo-depth", &plat->tx_fifo_size);
 
@@ -461,14 +456,6 @@ stmmac_probe_config_dt(struct platform_device *pdev, const char **mac)
 		plat->multicast_filter_bins = dwmac1000_validate_mcast_bins(
 					      plat->multicast_filter_bins);
 		plat->has_gmac = 1;
-		plat->pmt = 1;
-	}
-
-	if (of_device_is_compatible(np, "snps,dwmac-3.40a")) {
-		plat->has_gmac = 1;
-		plat->enh_desc = 1;
-		plat->tx_coe = 1;
-		plat->bugged_jumbo = 1;
 		plat->pmt = 1;
 	}
 
@@ -546,12 +533,6 @@ stmmac_probe_config_dt(struct platform_device *pdev, const char **mac)
 		plat->clk_ptp_rate = clk_get_rate(plat->clk_ptp_ref);
 		dev_dbg(&pdev->dev, "PTP rate %d\n", plat->clk_ptp_rate);
 	}
-
-	of_property_read_u32(
-		np, "snps,ptp-ref-clk-rate", &plat->clk_ptp_rate);
-
-	of_property_read_u32(
-		np, "snps,ptp-req-clk-rate", &plat->clk_ptp_req_rate);
 
 	plat->stmmac_rst = devm_reset_control_get(&pdev->dev,
 						  STMMAC_RESOURCE_NAME);

@@ -1,7 +1,6 @@
 #include <linux/extable.h>
 #include <linux/uaccess.h>
 #include <linux/sched/debug.h>
-#include <xen/xen.h>
 
 #include <asm/fpu/internal.h>
 #include <asm/traps.h>
@@ -170,7 +169,6 @@ bool ex_has_fault_handler(unsigned long ip)
 	return handler == ex_handler_fault;
 }
 
-__nocfi
 int fixup_exception(struct pt_regs *regs, int trapnr)
 {
 	const struct exception_table_entry *e;
@@ -214,9 +212,8 @@ void __init early_fixup_exception(struct pt_regs *regs, int trapnr)
 	 * Old CPUs leave the high bits of CS on the stack
 	 * undefined.  I'm not sure which CPUs do this, but at least
 	 * the 486 DX works this way.
-	 * Xen pv domains are not using the default __KERNEL_CS.
 	 */
-	if (!xen_pv_domain() && regs->cs != __KERNEL_CS)
+	if (regs->cs != __KERNEL_CS)
 		goto fail;
 
 	/*

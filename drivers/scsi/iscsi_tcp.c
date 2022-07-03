@@ -37,7 +37,6 @@
 #include <linux/kfifo.h>
 #include <linux/scatterlist.h>
 #include <linux/module.h>
-#include <linux/backing-dev.h>
 #include <net/tcp.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
@@ -372,15 +371,7 @@ static int iscsi_sw_tcp_pdu_xmit(struct iscsi_task *task)
 {
 	struct iscsi_conn *conn = task->conn;
 	unsigned int noreclaim_flag;
-	struct iscsi_tcp_conn *tcp_conn = conn->dd_data;
-	struct iscsi_sw_tcp_conn *tcp_sw_conn = tcp_conn->dd_data;
 	int rc = 0;
-
-	if (!tcp_sw_conn->sock) {
-		iscsi_conn_printk(KERN_ERR, conn,
-				  "Transport not bound to socket!\n");
-		return -EINVAL;
-	}
 
 	noreclaim_flag = memalloc_noreclaim_save();
 
@@ -806,8 +797,7 @@ static int iscsi_sw_tcp_host_get_param(struct Scsi_Host *shost,
 			return rc;
 
 		return iscsi_conn_get_addr_param((struct sockaddr_storage *)
-						 &addr,
-						 (enum iscsi_param)param, buf);
+						 &addr, param, buf);
 	default:
 		return iscsi_host_get_param(shost, param, buf);
 	}
@@ -890,10 +880,6 @@ free_host:
 static void iscsi_sw_tcp_session_destroy(struct iscsi_cls_session *cls_session)
 {
 	struct Scsi_Host *shost = iscsi_session_to_shost(cls_session);
-	struct iscsi_session *session = cls_session->dd_data;
-
-	if (WARN_ON_ONCE(session->leadconn))
-		return;
 
 	iscsi_tcp_r2tpool_free(cls_session->dd_data);
 	iscsi_session_teardown(cls_session);
@@ -966,13 +952,6 @@ static int iscsi_sw_tcp_slave_alloc(struct scsi_device *sdev)
 
 static int iscsi_sw_tcp_slave_configure(struct scsi_device *sdev)
 {
-	struct iscsi_sw_tcp_host *tcp_sw_host = iscsi_host_priv(sdev->host);
-	struct iscsi_session *session = tcp_sw_host->session;
-	struct iscsi_conn *conn = session->leadconn;
-
-	if (conn->datadgst_en)
-		sdev->request_queue->backing_dev_info->capabilities
-			|= BDI_CAP_STABLE_WRITES;
 	blk_queue_bounce_limit(sdev->request_queue, BLK_BOUNCE_ANY);
 	blk_queue_dma_alignment(sdev->request_queue, 0);
 	return 0;

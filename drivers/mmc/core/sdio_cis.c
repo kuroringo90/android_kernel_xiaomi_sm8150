@@ -24,16 +24,11 @@
 #include "sdio_cis.h"
 #include "sdio_ops.h"
 
-#define SDIO_READ_CIS_TIMEOUT_MS  (10 * 1000) /* 10s */
-
 static int cistpl_vers_1(struct mmc_card *card, struct sdio_func *func,
 			 const unsigned char *buf, unsigned size)
 {
 	unsigned i, nr_strings;
 	char **buffer, *string;
-
-	if (size < 2)
-		return 0;
 
 	/* Find all null-terminated (including zero length) strings in
 	   the TPLLV1_INFO field. Trailing garbage is ignored. */
@@ -60,7 +55,7 @@ static int cistpl_vers_1(struct mmc_card *card, struct sdio_func *func,
 
 	for (i = 0; i < nr_strings; i++) {
 		buffer[i] = string;
-		strlcpy(string, buf, strlen(buf) + 1);
+		strcpy(string, buf);
 		string += strlen(string) + 1;
 		buf += strlen(buf) + 1;
 	}
@@ -272,8 +267,6 @@ static int sdio_read_cis(struct mmc_card *card, struct sdio_func *func)
 
 	do {
 		unsigned char tpl_code, tpl_link;
-		unsigned long timeout = jiffies +
-			msecs_to_jiffies(SDIO_READ_CIS_TIMEOUT_MS);
 
 		ret = mmc_io_rw_direct(card, 0, 0, ptr++, 0, &tpl_code);
 		if (ret)
@@ -284,16 +277,8 @@ static int sdio_read_cis(struct mmc_card *card, struct sdio_func *func)
 			break;
 
 		/* null entries have no link field or data */
-		if (tpl_code == 0x00) {
-			if (card->cis.vendor == 0x70 &&
-				(card->cis.device == 0x2460 ||
-				 card->cis.device == 0x0460 ||
-				 card->cis.device == 0x23F1 ||
-				 card->cis.device == 0x23F0))
-				break;
-
+		if (tpl_code == 0x00)
 			continue;
-		}
 
 		ret = mmc_io_rw_direct(card, 0, 0, ptr++, 0, &tpl_link);
 		if (ret)
@@ -334,8 +319,6 @@ static int sdio_read_cis(struct mmc_card *card, struct sdio_func *func)
 			prev = &this->next;
 
 			if (ret == -ENOENT) {
-				if (time_after(jiffies, timeout))
-					break;
 				/* warn about unknown tuples */
 				pr_warn_ratelimited("%s: queuing unknown"
 				       " CIS tuple 0x%02x (%u bytes)\n",

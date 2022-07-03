@@ -1223,20 +1223,19 @@ static int br_dev_newlink(struct net *src_net, struct net_device *dev,
 	struct net_bridge *br = netdev_priv(dev);
 	int err;
 
-	err = register_netdevice(dev);
-	if (err)
-		return err;
-
 	if (tb[IFLA_ADDRESS]) {
 		spin_lock_bh(&br->lock);
 		br_stp_change_bridge_id(br, nla_data(tb[IFLA_ADDRESS]));
 		spin_unlock_bh(&br->lock);
 	}
 
+	err = register_netdevice(dev);
+	if (err)
+		return err;
+
 	err = br_changelink(dev, tb, data, extack);
 	if (err)
-		br_dev_delete(dev, NULL);
-
+		unregister_netdevice(dev);
 	return err;
 }
 
@@ -1437,7 +1436,7 @@ static size_t br_get_linkxstats_size(const struct net_device *dev, int attr)
 	}
 
 	return numvls * nla_total_size(sizeof(struct bridge_vlan_xstats)) +
-	       nla_total_size_64bit(sizeof(struct br_mcast_stats)) +
+	       nla_total_size(sizeof(struct br_mcast_stats)) +
 	       nla_total_size(0);
 }
 

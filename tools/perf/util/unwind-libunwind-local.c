@@ -631,8 +631,9 @@ static unw_accessors_t accessors = {
 
 static int _unwind__prepare_access(struct thread *thread)
 {
-	if (!dwarf_callchain_users)
+	if (callchain_param.record_mode != CALLCHAIN_DWARF)
 		return 0;
+
 	thread->addr_space = unw_create_addr_space(&accessors, 0);
 	if (!thread->addr_space) {
 		pr_err("unwind: Can't create unwind address space.\n");
@@ -645,15 +646,17 @@ static int _unwind__prepare_access(struct thread *thread)
 
 static void _unwind__flush_access(struct thread *thread)
 {
-	if (!dwarf_callchain_users)
+	if (callchain_param.record_mode != CALLCHAIN_DWARF)
 		return;
+
 	unw_flush_cache(thread->addr_space, 0, 0);
 }
 
 static void _unwind__finish_access(struct thread *thread)
 {
-	if (!dwarf_callchain_users)
+	if (callchain_param.record_mode != CALLCHAIN_DWARF)
 		return;
+
 	unw_destroy_addr_space(thread->addr_space);
 }
 

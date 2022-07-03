@@ -5,7 +5,6 @@
 #include <linux/user.h>
 #include <linux/regset.h>
 #include <linux/syscalls.h>
-#include <linux/nospec.h>
 
 #include <linux/uaccess.h>
 #include <asm/desc.h>
@@ -94,10 +93,17 @@ static void set_tls_desc(struct task_struct *p, int idx,
 	cpu = get_cpu();
 
 	while (n-- > 0) {
-		if (LDT_empty(info) || LDT_zero(info))
+		if (LDT_empty(info) || LDT_zero(info)) {
 			memset(desc, 0, sizeof(*desc));
-		else
+		} else {
 			fill_ldt(desc, info);
+
+			/*
+			 * Always set the accessed bit so that the CPU
+			 * doesn't try to write to the (read-only) GDT.
+			 */
+			desc->type |= 1;
+		}
 		++info;
 		++desc;
 	}
@@ -221,7 +227,6 @@ int do_get_thread_area(struct task_struct *p, int idx,
 		       struct user_desc __user *u_info)
 {
 	struct user_desc info;
-	int index;
 
 	if (idx == -1 && get_user(idx, &u_info->entry_number))
 		return -EFAULT;
@@ -229,11 +234,8 @@ int do_get_thread_area(struct task_struct *p, int idx,
 	if (idx < GDT_ENTRY_TLS_MIN || idx > GDT_ENTRY_TLS_MAX)
 		return -EINVAL;
 
-	index = idx - GDT_ENTRY_TLS_MIN;
-	index = array_index_nospec(index,
-			GDT_ENTRY_TLS_MAX - GDT_ENTRY_TLS_MIN + 1);
-
-	fill_user_desc(&info, idx, &p->thread.tls_array[index]);
+	fill_user_desc(&info, idx,
+		       &p->thread.tls_array[idx - GDT_ENTRY_TLS_MIN]);
 
 	if (copy_to_user(u_info, &info, sizeof(info)))
 		return -EFAULT;

@@ -29,6 +29,9 @@
 #define RES_RING_CSR	1
 #define RES_RING_CMD	2
 
+static const struct of_device_id xgene_enet_of_match[];
+static const struct acpi_device_id xgene_enet_acpi_match[];
+
 static void xgene_enet_init_bufpool(struct xgene_enet_desc_ring *buf_pool)
 {
 	struct xgene_enet_raw_desc16 *raw_desc;
@@ -707,12 +710,6 @@ static int xgene_enet_rx_frame(struct xgene_enet_desc_ring *rx_ring,
 	buf_pool->rx_skb[skb_index] = NULL;
 
 	datalen = xgene_enet_get_data_len(le64_to_cpu(raw_desc->m1));
-
-	/* strip off CRC as HW isn't doing this */
-	nv = GET_VAL(NV, le64_to_cpu(raw_desc->m0));
-	if (!nv)
-		datalen -= 4;
-
 	skb_put(skb, datalen);
 	prefetch(skb->data - NET_IP_ALIGN);
 	skb->protocol = eth_type_trans(skb, ndev);
@@ -734,8 +731,12 @@ static int xgene_enet_rx_frame(struct xgene_enet_desc_ring *rx_ring,
 		}
 	}
 
-	if (!nv)
+	nv = GET_VAL(NV, le64_to_cpu(raw_desc->m0));
+	if (!nv) {
+		/* strip off CRC as HW isn't doing this */
+		datalen -= 4;
 		goto skip_jumbo;
+	}
 
 	slots = page_pool->slots - 1;
 	head = page_pool->head;
@@ -2036,7 +2037,7 @@ static int xgene_enet_probe(struct platform_device *pdev)
 	int ret;
 
 	ndev = alloc_etherdev_mqs(sizeof(struct xgene_enet_pdata),
-				  XGENE_NUM_TX_RING, XGENE_NUM_RX_RING);
+				  XGENE_NUM_RX_RING, XGENE_NUM_TX_RING);
 	if (!ndev)
 		return -ENOMEM;
 

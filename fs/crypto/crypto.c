@@ -26,7 +26,6 @@
 #include <linux/ratelimit.h>
 #include <crypto/skcipher.h>
 #include "fscrypt_private.h"
-#include <linux/genhd.h>
 
 static unsigned int num_prealloc_crypto_pages = 32;
 
@@ -69,47 +68,18 @@ void fscrypt_free_bounce_page(struct page *bounce_page)
 }
 EXPORT_SYMBOL(fscrypt_free_bounce_page);
 
-/*
- * Generate the IV for the given logical block number within the given file.
- * For filenames encryption, lblk_num == 0.
- *
- * Keep this in sync with fscrypt_limit_dio_pages().  fscrypt_limit_dio_pages()
- * needs to know about any IV generation methods where the low bits of IV don't
- * simply contain the lblk_num (e.g., IV_INO_LBLK_32).
- */
 void fscrypt_generate_iv(union fscrypt_iv *iv, u64 lblk_num,
 			 const struct fscrypt_info *ci)
 {
 	u8 flags = fscrypt_policy_flags(&ci->ci_policy);
 
-	bool inlinecrypt = false;
-
-#ifdef CONFIG_FS_ENCRYPTION_INLINE_CRYPT
-	inlinecrypt = ci->ci_inlinecrypt;
-#endif
 	memset(iv, 0, ci->ci_mode->ivsize);
 
-	if ((fscrypt_policy_contents_mode(&ci->ci_policy) ==
-					  FSCRYPT_MODE_PRIVATE)
-					  && inlinecrypt) {
-		if (ci->ci_inode->i_sb->s_type->name &&
-		    !strcmp(ci->ci_inode->i_sb->s_type->name, "f2fs")) {
-			if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) {
-				WARN_ON_ONCE(lblk_num > U32_MAX);
-				lblk_num = (u32)(ci->ci_hashed_ino + lblk_num);
-			} else {
-				WARN_ON_ONCE(lblk_num > U32_MAX);
-				WARN_ON_ONCE(ci->ci_inode->i_ino > U32_MAX);
-				lblk_num |= (u64)ci->ci_inode->i_ino << 32;
-			}
-		}
-	} else if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64) {
+	if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64) {
 		WARN_ON_ONCE(lblk_num > U32_MAX);
 		WARN_ON_ONCE(ci->ci_inode->i_ino > U32_MAX);
 		lblk_num |= (u64)ci->ci_inode->i_ino << 32;
-	} else if ((flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) &&
-		   !(fscrypt_policy_contents_mode(&ci->ci_policy) ==
-		     FSCRYPT_MODE_PRIVATE)) {
+	} else if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) {
 		WARN_ON_ONCE(lblk_num > U32_MAX);
 		lblk_num = (u32)(ci->ci_hashed_ino + lblk_num);
 	} else if (flags & FSCRYPT_POLICY_FLAG_DIRECT_KEY) {
@@ -129,7 +99,7 @@ int fscrypt_crypt_block(const struct inode *inode, fscrypt_direction_t rw,
 	DECLARE_CRYPTO_WAIT(wait);
 	struct scatterlist dst, src;
 	struct fscrypt_info *ci = inode->i_crypt_info;
-	struct crypto_skcipher *tfm = ci->ci_key.tfm;
+	struct crypto_skcipher *tfm = ci->ci_ctfm;
 	int res = 0;
 
 	if (WARN_ON_ONCE(len <= 0))

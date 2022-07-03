@@ -294,11 +294,9 @@ static void fc_disc_done(struct fc_disc *disc, enum fc_disc_event event)
 	 * discovery, reverify or log them in.	Otherwise, log them out.
 	 * Skip ports which were never discovered.  These are the dNS port
 	 * and ports which were created by PLOGI.
-	 *
-	 * We don't need to use the _rcu variant here as the rport list
-	 * is protected by the disc mutex which is already held on entry.
 	 */
-	list_for_each_entry(rdata, &disc->rports, peers) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(rdata, &disc->rports, peers) {
 		if (!kref_get_unless_zero(&rdata->kref))
 			continue;
 		if (rdata->disc_id) {
@@ -309,6 +307,7 @@ static void fc_disc_done(struct fc_disc *disc, enum fc_disc_event event)
 		}
 		kref_put(&rdata->kref, fc_rport_destroy);
 	}
+	rcu_read_unlock();
 	mutex_unlock(&disc->disc_mutex);
 	disc->disc_callback(lport, event);
 	mutex_lock(&disc->disc_mutex);
@@ -605,12 +604,8 @@ static void fc_disc_gpn_id_resp(struct fc_seq *sp, struct fc_frame *fp,
 
 	if (PTR_ERR(fp) == -FC_EX_CLOSED)
 		goto out;
-	if (IS_ERR(fp)) {
-		mutex_lock(&disc->disc_mutex);
-		fc_disc_restart(disc);
-		mutex_unlock(&disc->disc_mutex);
-		goto out;
-	}
+	if (IS_ERR(fp))
+		goto redisc;
 
 	cp = fc_frame_payload_get(fp, sizeof(*cp));
 	if (!cp)
@@ -637,7 +632,7 @@ static void fc_disc_gpn_id_resp(struct fc_seq *sp, struct fc_frame *fp,
 				new_rdata->disc_id = disc->disc_id;
 				fc_rport_login(new_rdata);
 			}
-			goto free_fp;
+			goto out;
 		}
 		rdata->disc_id = disc->disc_id;
 		mutex_unlock(&rdata->rp_mutex);
@@ -654,8 +649,6 @@ redisc:
 		fc_disc_restart(disc);
 		mutex_unlock(&disc->disc_mutex);
 	}
-free_fp:
-	fc_frame_free(fp);
 out:
 	kref_put(&rdata->kref, fc_rport_destroy);
 }

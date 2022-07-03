@@ -37,9 +37,17 @@ static void psp_set_funcs(struct amdgpu_device *adev);
 static int psp_early_init(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
-	struct psp_context *psp = &adev->psp;
 
 	psp_set_funcs(adev);
+
+	return 0;
+}
+
+static int psp_sw_init(void *handle)
+{
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+	struct psp_context *psp = &adev->psp;
+	int ret;
 
 	switch (adev->asic_type) {
 	case CHIP_VEGA10:
@@ -70,15 +78,6 @@ static int psp_early_init(void *handle)
 	}
 
 	psp->adev = adev;
-
-	return 0;
-}
-
-static int psp_sw_init(void *handle)
-{
-	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
-	struct psp_context *psp = &adev->psp;
-	int ret;
 
 	ret = psp_init_microcode(psp);
 	if (ret) {
@@ -133,11 +132,6 @@ psp_cmd_submit_buf(struct psp_context *psp,
 
 	while (*((unsigned int *)psp->fence_buf) != index) {
 		msleep(1);
-	}
-
-	if (ucode) {
-		ucode->tmr_mc_addr_lo = psp->cmd_buf_mem->resp.fw_addr_lo;
-		ucode->tmr_mc_addr_hi = psp->cmd_buf_mem->resp.fw_addr_hi;
 	}
 
 	return ret;

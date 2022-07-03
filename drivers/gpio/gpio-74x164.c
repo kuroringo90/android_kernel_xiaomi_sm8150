@@ -23,7 +23,6 @@
 struct gen_74x164_chip {
 	struct gpio_chip	gpio_chip;
 	struct mutex		lock;
-	struct gpio_desc	*gpiod_oe;
 	u32			registers;
 	/*
 	 * Since the registers are chained, every byte sent will make
@@ -32,7 +31,8 @@ struct gen_74x164_chip {
 	 * register at the end of the transfer. So, to have a logical
 	 * numbering, store the bytes in reverse order.
 	 */
-	u8			buffer[];
+	u8			buffer[0];
+	struct gpio_desc	*gpiod_oe;
 };
 
 static int __gen_74x164_write_config(struct gen_74x164_chip *chip)

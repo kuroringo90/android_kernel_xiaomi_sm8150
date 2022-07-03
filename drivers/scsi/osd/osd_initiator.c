@@ -1576,9 +1576,7 @@ static struct request *_make_request(struct request_queue *q, bool has_write,
 		return req;
 
 	for_each_bio(bio) {
-		struct bio *bounce_bio = bio;
-
-		ret = blk_rq_append_bio(req, &bounce_bio);
+		ret = blk_rq_append_bio(req, bio);
 		if (ret)
 			return ERR_PTR(ret);
 	}

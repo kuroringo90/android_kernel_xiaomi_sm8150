@@ -65,7 +65,6 @@ static int run_lwt_bpf(struct sk_buff *skb, struct bpf_lwt_prog *lwt,
 				     lwt->name ? : "<unknown>");
 			ret = BPF_OK;
 		} else {
-			skb_reset_mac_header(skb);
 			ret = skb_do_redirect(skb);
 			if (ret == 0)
 				ret = BPF_REDIRECT;
@@ -218,7 +217,7 @@ static int bpf_parse_prog(struct nlattr *attr, struct bpf_lwt_prog *prog,
 	if (!tb[LWT_BPF_PROG_FD] || !tb[LWT_BPF_PROG_NAME])
 		return -EINVAL;
 
-	prog->name = nla_memdup(tb[LWT_BPF_PROG_NAME], GFP_ATOMIC);
+	prog->name = nla_memdup(tb[LWT_BPF_PROG_NAME], GFP_KERNEL);
 	if (!prog->name)
 		return -ENOMEM;
 

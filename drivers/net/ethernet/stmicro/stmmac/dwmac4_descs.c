@@ -86,17 +86,9 @@ static int dwmac4_wrback_get_rx_status(void *data, struct stmmac_extra_stats *x,
 	if (unlikely(rdes3 & RDES3_OWN))
 		return dma_own;
 
-	if (likely((rdes3 & RDES3_CONTEXT_DESCRIPTOR)))
-		return (discard_frame | ctxt_desc);
-
 	/* Verify rx error by looking at the last segment. */
 	if (likely(!(rdes3 & RDES3_LAST_DESCRIPTOR)))
 		return discard_frame;
-
-	if (unlikely(!(rdes3 & RDES3_PACKET_LEN_TYPE_MASK))) {
-		pr_info("rdes3 = 0xX\n", rdes3);
-		ret = llc_snap;
-	}
 
 	if (unlikely(rdes3 & RDES3_ERROR_SUMMARY)) {
 		if (unlikely(rdes3 & RDES3_GIANT_PACKET))
@@ -246,18 +238,15 @@ static inline u64 dwmac4_get_timestamp(void *desc, u32 ats)
 static int dwmac4_rx_check_timestamp(void *desc)
 {
 	struct dma_desc *p = (struct dma_desc *)desc;
-	unsigned int rdes0 = le32_to_cpu(p->des0);
-	unsigned int rdes1 = le32_to_cpu(p->des1);
-	unsigned int rdes3 = le32_to_cpu(p->des3);
 	u32 own, ctxt;
 	int ret = 1;
 
-	own = rdes3 & RDES3_OWN;
-	ctxt = ((rdes3 & RDES3_CONTEXT_DESCRIPTOR)
+	own = p->des3 & RDES3_OWN;
+	ctxt = ((p->des3 & RDES3_CONTEXT_DESCRIPTOR)
 		>> RDES3_CONTEXT_DESCRIPTOR_SHIFT);
 
 	if (likely(!own && ctxt)) {
-		if ((rdes0 == 0xffffffff) && (rdes1 == 0xffffffff))
+		if ((p->des0 == 0xffffffff) && (p->des1 == 0xffffffff))
 			/* Corrupted value */
 			ret = -EINVAL;
 		else
@@ -269,8 +258,7 @@ static int dwmac4_rx_check_timestamp(void *desc)
 	return ret;
 }
 
-static int dwmac4_wrback_get_rx_timestamp_status(void *desc, void *next_desc,
-						 u32 ats)
+static int dwmac4_wrback_get_rx_timestamp_status(void *desc, u32 ats)
 {
 	struct dma_desc *p = (struct dma_desc *)desc;
 	int ret = -EINVAL;
@@ -282,7 +270,7 @@ static int dwmac4_wrback_get_rx_timestamp_status(void *desc, void *next_desc,
 
 			/* Check if timestamp is OK from context descriptor */
 			do {
-				ret = dwmac4_rx_check_timestamp(next_desc);
+				ret = dwmac4_rx_check_timestamp(desc);
 				if (ret < 0)
 					goto exit;
 				i++;
@@ -301,7 +289,7 @@ exit:
 }
 
 static void dwmac4_rd_init_rx_desc(struct dma_desc *p, int disable_rx_ic,
-				   int mode, int end, int bfsize)
+				   int mode, int end)
 {
 	p->des3 = cpu_to_le32(RDES3_OWN | RDES3_BUFFER1_VALID_ADDR);
 

@@ -17,6 +17,7 @@
 #define _INET_SOCK_H
 
 #include <linux/bitops.h>
+#include <linux/kmemcheck.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/jhash.h>
@@ -83,6 +84,7 @@ struct inet_request_sock {
 #define ireq_state		req.__req_common.skc_state
 #define ireq_family		req.__req_common.skc_family
 
+	kmemcheck_bitfield_begin(flags);
 	u16			snd_wscale : 4,
 				rcv_wscale : 4,
 				tstamp_ok  : 1,
@@ -91,6 +93,7 @@ struct inet_request_sock {
 				ecn_ok	   : 1,
 				acked	   : 1,
 				no_srccheck: 1;
+	kmemcheck_bitfield_end(flags);
 	u32                     ir_mark;
 	union {
 		struct ip_options_rcu __rcu	*ireq_opt;
@@ -129,6 +132,12 @@ static inline int inet_request_bound_dev_if(const struct sock *sk,
 	return sk->sk_bound_dev_if;
 }
 
+static inline struct ip_options_rcu *ireq_opt_deref(const struct inet_request_sock *ireq)
+{
+	return rcu_dereference_check(ireq->ireq_opt,
+				     refcount_read(&ireq->req.rsk_refcnt) > 0);
+}
+
 struct inet_cork {
 	unsigned int		flags;
 	__be32			addr;
@@ -140,7 +149,6 @@ struct inet_cork {
 	__u8			ttl;
 	__s16			tos;
 	char			priority;
-	__u16			gso_size;
 };
 
 struct inet_cork_full {

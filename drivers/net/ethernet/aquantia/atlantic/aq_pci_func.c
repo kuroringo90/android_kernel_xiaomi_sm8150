@@ -51,8 +51,7 @@ struct aq_pci_func_s *aq_pci_func_alloc(struct aq_hw_ops *aq_hw_ops,
 	pci_set_drvdata(pdev, self);
 	self->pdev = pdev;
 
-	err = aq_hw_ops->get_hw_caps(NULL, &self->aq_hw_caps, pdev->device,
-				     pdev->subsystem_device);
+	err = aq_hw_ops->get_hw_caps(NULL, &self->aq_hw_caps);
 	if (err < 0)
 		goto err_exit;
 
@@ -60,7 +59,7 @@ struct aq_pci_func_s *aq_pci_func_alloc(struct aq_hw_ops *aq_hw_ops,
 
 	for (port = 0; port < self->ports; ++port) {
 		struct aq_nic_s *aq_nic = aq_nic_alloc_cold(ndev_ops, eth_ops,
-							    pdev, self,
+							    &pdev->dev, self,
 							    port, aq_hw_ops);
 
 		if (!aq_nic) {

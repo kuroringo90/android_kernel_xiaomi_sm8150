@@ -675,11 +675,15 @@ static struct raid_type *get_raid_type_by_ll(const int level, const int layout)
 	return NULL;
 }
 
-/* Adjust rdev sectors */
-static void rs_set_rdev_sectors(struct raid_set *rs)
+/*
+ * Conditionally change bdev capacity of @rs
+ * in case of a disk add/remove reshape
+ */
+static void rs_set_capacity(struct raid_set *rs)
 {
 	struct mddev *mddev = &rs->md;
 	struct md_rdev *rdev;
+	struct gendisk *gendisk = dm_disk(dm_table_get_md(rs->ti->table));
 
 	/*
 	 * raid10 sets rdev->sector to the device size, which
@@ -688,16 +692,8 @@ static void rs_set_rdev_sectors(struct raid_set *rs)
 	rdev_for_each(rdev, mddev)
 		if (!test_bit(Journal, &rdev->flags))
 			rdev->sectors = mddev->dev_sectors;
-}
 
-/*
- * Change bdev capacity of @rs in case of a disk add/remove reshape
- */
-static void rs_set_capacity(struct raid_set *rs)
-{
-	struct gendisk *gendisk = dm_disk(dm_table_get_md(rs->ti->table));
-
-	set_capacity(gendisk, rs->md.array_sectors);
+	set_capacity(gendisk, mddev->array_sectors);
 	revalidate_disk(gendisk);
 }
 
@@ -1678,11 +1674,8 @@ static void do_table_event(struct work_struct *ws)
 	struct raid_set *rs = container_of(ws, struct raid_set, md.event_work);
 
 	smp_rmb(); /* Make sure we access most actual mddev properties */
-	if (!rs_is_reshaping(rs)) {
-		if (rs_is_raid10(rs))
-			rs_set_rdev_sectors(rs);
+	if (!rs_is_reshaping(rs))
 		rs_set_capacity(rs);
-	}
 	dm_table_event(rs->ti->table);
 }
 
@@ -2441,7 +2434,7 @@ static int super_validate(struct raid_set *rs, struct md_rdev *rdev)
 	}
 
 	/* Enable bitmap creation for RAID levels != 0 */
-	mddev->bitmap_info.offset = (rt_is_raid0(rs->raid_type) || rs->journal_dev.dev) ? 0 : to_sector(4096);
+	mddev->bitmap_info.offset = rt_is_raid0(rs->raid_type) ? 0 : to_sector(4096);
 	mddev->bitmap_info.default_offset = mddev->bitmap_info.offset;
 
 	if (!test_and_clear_bit(FirstUse, &rdev->flags)) {
@@ -3061,11 +3054,6 @@ static int raid_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		set_bit(RT_FLAG_UPDATE_SBS, &rs->runtime_flags);
 		rs_set_new(rs);
 	} else if (rs_is_recovering(rs)) {
-		/* Rebuild particular devices */
-		if (test_bit(__CTR_FLAG_REBUILD, &rs->ctr_flags)) {
-			set_bit(RT_FLAG_UPDATE_SBS, &rs->runtime_flags);
-			rs_setup_recovery(rs, MaxSector);
-		}
 		/* A recovering raid set may be resized */
 		; /* skip setup rs */
 	} else if (rs_is_reshaping(rs)) {
@@ -3642,11 +3630,8 @@ static void raid_postsuspend(struct dm_target *ti)
 {
 	struct raid_set *rs = ti->private;
 
-	if (!test_and_set_bit(RT_FLAG_RS_SUSPENDED, &rs->runtime_flags)) {
-		mddev_lock_nointr(&rs->md);
+	if (!test_and_set_bit(RT_FLAG_RS_SUSPENDED, &rs->runtime_flags))
 		mddev_suspend(&rs->md);
-		mddev_unlock(&rs->md);
-	}
 
 	rs->md.ro = 1;
 }
@@ -3860,10 +3845,11 @@ static int raid_preresume(struct dm_target *ti)
 		mddev->resync_min = mddev->recovery_cp;
 	}
 
+	rs_set_capacity(rs);
+
 	/* Check for any reshape request unless new raid set */
 	if (test_and_clear_bit(RT_FLAG_RESHAPE_RS, &rs->runtime_flags)) {
 		/* Initiate a reshape. */
-		rs_set_rdev_sectors(rs);
 		mddev_lock_nointr(mddev);
 		r = rs_start_reshape(rs);
 		mddev_unlock(mddev);
@@ -3892,10 +3878,6 @@ static void raid_resume(struct dm_target *ti)
 	mddev->ro = 0;
 	mddev->in_sync = 0;
 
-	/* Only reduce raid set size before running a disk removing reshape. */
-	if (mddev->delta_disks < 0)
-		rs_set_capacity(rs);
-
 	/*
 	 * Keep the RAID set frozen if reshape/rebuild flags are set.
 	 * The RAID set is unfrozen once the next table load/resume,
@@ -3906,11 +3888,8 @@ static void raid_resume(struct dm_target *ti)
 	if (!(rs->ctr_flags & RESUME_STAY_FROZEN_FLAGS))
 		clear_bit(MD_RECOVERY_FROZEN, &mddev->recovery);
 
-	if (test_and_clear_bit(RT_FLAG_RS_SUSPENDED, &rs->runtime_flags)) {
-		mddev_lock_nointr(mddev);
+	if (test_and_clear_bit(RT_FLAG_RS_SUSPENDED, &rs->runtime_flags))
 		mddev_resume(mddev);
-		mddev_unlock(mddev);
-	}
 }
 
 static struct target_type raid_target = {

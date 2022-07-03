@@ -397,8 +397,7 @@ struct qdisc_rate_table *qdisc_get_rtab(struct tc_ratespec *r,
 {
 	struct qdisc_rate_table *rtab;
 
-	if (tab == NULL || r->rate == 0 ||
-	    r->cell_log == 0 || r->cell_log >= 32 ||
+	if (tab == NULL || r->rate == 0 || r->cell_log == 0 ||
 	    nla_len(tab) != TC_RTAB_SIZE)
 		return NULL;
 
@@ -1217,16 +1216,6 @@ check_loop_fn(struct Qdisc *q, unsigned long cl, struct qdisc_walker *w)
  * Delete/get qdisc.
  */
 
-const struct nla_policy rtm_tca_policy[TCA_MAX + 1] = {
-	[TCA_KIND]		= { .type = NLA_NUL_STRING,
-				    .len = IFNAMSIZ - 1 },
-	[TCA_RATE]		= { .type = NLA_BINARY,
-				    .len = sizeof(struct tc_estimator) },
-	[TCA_STAB]		= { .type = NLA_NESTED },
-	[TCA_DUMP_INVISIBLE]	= { .type = NLA_FLAG },
-	[TCA_CHAIN]		= { .type = NLA_U32 },
-};
-
 static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 			struct netlink_ext_ack *extack)
 {
@@ -1243,8 +1232,7 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 	    !netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
 
-	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, rtm_tca_policy,
-			  extack);
+	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, NULL, extack);
 	if (err < 0)
 		return err;
 
@@ -1295,40 +1283,6 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 }
 
 /*
- * enable/disable flow on qdisc.
- */
-int
-tc_qdisc_flow_control(struct net_device *dev, u32 tcm_handle, int enable_flow)
-{
-	struct Qdisc *q;
-	int qdisc_len = 0;
-	struct __qdisc_change_req {
-		struct nlattr attr;
-		struct tc_prio_qopt data;
-	} req =	{
-		.attr = {sizeof(struct __qdisc_change_req), TCA_OPTIONS},
-		.data = {3, {1, 2, 2, 2, 1, 2, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1}, 1}
-		};
-
-	/* override flow bit */
-	req.data.enable_flow = enable_flow;
-
-	/* look up using tcm handle */
-	q = qdisc_lookup(dev, tcm_handle);
-
-	/* call registered change function */
-	if (likely(q && q->ops)) {
-		if (likely(q->ops->change)) {
-			qdisc_len = q->q.qlen;
-			if (q->ops->change(q, &req.attr))
-				pr_err("%s(): qdisc change failed", __func__);
-		}
-	}
-	return qdisc_len;
-}
-EXPORT_SYMBOL(tc_qdisc_flow_control);
-
-/*
  * Create/change qdisc.
  */
 
@@ -1348,8 +1302,7 @@ static int tc_modify_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 
 replay:
 	/* Reinit, just in case something touches this. */
-	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, rtm_tca_policy,
-			  extack);
+	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, NULL, extack);
 	if (err < 0)
 		return err;
 
@@ -1559,8 +1512,7 @@ static int tc_dump_qdisc(struct sk_buff *skb, struct netlink_callback *cb)
 	idx = 0;
 	ASSERT_RTNL();
 
-	err = nlmsg_parse(nlh, sizeof(*tcm), tca, TCA_MAX,
-			  rtm_tca_policy, NULL);
+	err = nlmsg_parse(nlh, sizeof(*tcm), tca, TCA_MAX, NULL, NULL);
 	if (err < 0)
 		return err;
 
@@ -1730,8 +1682,6 @@ static void tc_bind_tclass(struct Qdisc *q, u32 portid, u32 clid,
 	cl = cops->find(q, portid);
 	if (!cl)
 		return;
-	if (!cops->tcf_block)
-		return;
 	block = cops->tcf_block(q, cl);
 	if (!block)
 		return;
@@ -1779,8 +1729,7 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n,
 	    !netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
 
-	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, rtm_tca_policy,
-			  extack);
+	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, NULL, extack);
 	if (err < 0)
 		return err;
 
@@ -1938,7 +1887,7 @@ static int tc_dump_tclass_qdisc(struct Qdisc *q, struct sk_buff *skb,
 
 static int tc_dump_tclass_root(struct Qdisc *root, struct sk_buff *skb,
 			       struct tcmsg *tcm, struct netlink_callback *cb,
-			       int *t_p, int s_t, bool recur)
+			       int *t_p, int s_t)
 {
 	struct Qdisc *q;
 	int b;
@@ -1949,13 +1898,12 @@ static int tc_dump_tclass_root(struct Qdisc *root, struct sk_buff *skb,
 	if (tc_dump_tclass_qdisc(root, skb, tcm, cb, t_p, s_t) < 0)
 		return -1;
 
-	if (!qdisc_dev(root) || !recur)
+	if (!qdisc_dev(root))
 		return 0;
 
 	if (tcm->tcm_parent) {
 		q = qdisc_match_from_root(root, TC_H_MAJ(tcm->tcm_parent));
-		if (q && q != root &&
-		    tc_dump_tclass_qdisc(q, skb, tcm, cb, t_p, s_t) < 0)
+		if (q && tc_dump_tclass_qdisc(q, skb, tcm, cb, t_p, s_t) < 0)
 			return -1;
 		return 0;
 	}
@@ -1984,13 +1932,13 @@ static int tc_dump_tclass(struct sk_buff *skb, struct netlink_callback *cb)
 	s_t = cb->args[0];
 	t = 0;
 
-	if (tc_dump_tclass_root(dev->qdisc, skb, tcm, cb, &t, s_t, true) < 0)
+	if (tc_dump_tclass_root(dev->qdisc, skb, tcm, cb, &t, s_t) < 0)
 		goto done;
 
 	dev_queue = dev_ingress_queue(dev);
 	if (dev_queue &&
 	    tc_dump_tclass_root(dev_queue->qdisc_sleeping, skb, tcm, cb,
-				&t, s_t, false) < 0)
+				&t, s_t) < 0)
 		goto done;
 
 done:

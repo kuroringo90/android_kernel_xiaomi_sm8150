@@ -211,16 +211,6 @@ void blk_queue_split(struct request_queue *q, struct bio **bio)
 		/* there isn't chance to merge the splitted bio */
 		split->bi_opf |= REQ_NOMERGE;
 
-		/*
-		 * Since we're recursing into make_request here, ensure
-		 * that we mark this bio as already having entered the queue.
-		 * If not, and the queue is going away, we can get stuck
-		 * forever on waiting for the queue reference to drop. But
-		 * that will never happen, as we're already holding a
-		 * reference to it.
-		 */
-		bio_set_flag(*bio, BIO_QUEUE_ENTERED);
-
 		bio_chain(split, *bio);
 		trace_block_split(q, split, (*bio)->bi_iter.bi_sector);
 		generic_make_request(*bio);
@@ -309,7 +299,13 @@ void blk_recalc_rq_segments(struct request *rq)
 
 void blk_recount_segments(struct request_queue *q, struct bio *bio)
 {
-	unsigned short seg_cnt = bio_segments(bio);
+	unsigned short seg_cnt;
+
+	/* estimate segment number by bi_vcnt for non-cloned bio */
+	if (bio_flagged(bio, BIO_CLONED))
+		seg_cnt = bio_segments(bio);
+	else
+		seg_cnt = bio->bi_vcnt;
 
 	if (test_bit(QUEUE_FLAG_NO_SG_MERGE, &q->queue_flags) &&
 			(seg_cnt < queue_max_segments(q)))
@@ -514,8 +510,6 @@ int ll_back_merge_fn(struct request_queue *q, struct request *req,
 		req_set_nomerge(q, req);
 		return 0;
 	}
-	if (!bio_crypt_ctx_mergeable(req->bio, blk_rq_bytes(req), bio))
-		return 0;
 	if (!bio_flagged(req->biotail, BIO_SEG_VALID))
 		blk_recount_segments(q, req->biotail);
 	if (!bio_flagged(bio, BIO_SEG_VALID))
@@ -538,8 +532,6 @@ int ll_front_merge_fn(struct request_queue *q, struct request *req,
 		req_set_nomerge(q, req);
 		return 0;
 	}
-	if (!bio_crypt_ctx_mergeable(bio, bio->bi_iter.bi_size, req->bio))
-		return 0;
 	if (!bio_flagged(bio, BIO_SEG_VALID))
 		blk_recount_segments(q, bio);
 	if (!bio_flagged(req->bio, BIO_SEG_VALID))
@@ -557,24 +549,6 @@ static bool req_no_special_merge(struct request *req)
 	struct request_queue *q = req->q;
 
 	return !q->mq_ops && req->special;
-}
-
-static bool req_attempt_discard_merge(struct request_queue *q, struct request *req,
-		struct request *next)
-{
-	unsigned short segments = blk_rq_nr_discard_segments(req);
-
-	if (segments >= queue_max_discard_segments(q))
-		goto no_merge;
-	if (blk_rq_sectors(req) + bio_sectors(next->bio) >
-	    blk_rq_get_max_sectors(req, blk_rq_pos(req)))
-		goto no_merge;
-
-	req->nr_phys_segments = segments + blk_rq_nr_discard_segments(next);
-	return true;
-no_merge:
-	req_set_nomerge(q, req);
-	return false;
 }
 
 static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
@@ -614,9 +588,6 @@ static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
 		return 0;
 
 	if (blk_integrity_merge_rq(q, req, next) == false)
-		return 0;
-
-	if (!bio_crypt_ctx_mergeable(req->bio, blk_rq_bytes(req), next->bio))
 		return 0;
 
 	/* Merge is OK... */
@@ -713,13 +684,9 @@ static struct request *attempt_merge(struct request_queue *q,
 	 * If we are allowed to merge, then append bio list
 	 * from next to rq and release next. merge_requests_fn
 	 * will have updated segment counts, update sector
-	 * counts here. Handle DISCARDs separately, as they
-	 * have separate settings.
+	 * counts here.
 	 */
-	if (req_op(req) == REQ_OP_DISCARD) {
-		if (!req_attempt_discard_merge(q, req, next))
-			return NULL;
-	} else if (!ll_merge_requests_fn(q, req, next))
+	if (!ll_merge_requests_fn(q, req, next))
 		return NULL;
 
 	/*
@@ -749,8 +716,7 @@ static struct request *attempt_merge(struct request_queue *q,
 
 	req->__data_len += blk_rq_bytes(next);
 
-	if (req_op(req) != REQ_OP_DISCARD)
-		elv_merge_requests(q, req, next);
+	elv_merge_requests(q, req, next);
 
 	/*
 	 * 'next' is going away, so update stats accordingly
@@ -838,10 +804,6 @@ bool blk_rq_merge_ok(struct request *rq, struct bio *bio)
 	 * non-hint IO.
 	 */
 	if (rq->write_hint != bio->bi_write_hint)
-		return false;
-
-	/* Only merge if the crypt contexts are compatible */
-	if (!bio_crypt_ctx_compatible(bio, rq->bio))
 		return false;
 
 	return true;

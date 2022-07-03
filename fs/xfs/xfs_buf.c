@@ -58,32 +58,6 @@ static kmem_zone_t *xfs_buf_zone;
 #define xb_to_gfp(flags) \
 	((((flags) & XBF_READ_AHEAD) ? __GFP_NORETRY : GFP_NOFS) | __GFP_NOWARN)
 
-/*
- * Locking orders
- *
- * xfs_buf_ioacct_inc:
- * xfs_buf_ioacct_dec:
- *	b_sema (caller holds)
- *	  b_lock
- *
- * xfs_buf_stale:
- *	b_sema (caller holds)
- *	  b_lock
- *	    lru_lock
- *
- * xfs_buf_rele:
- *	b_lock
- *	  pag_buf_lock
- *	    lru_lock
- *
- * xfs_buftarg_wait_rele
- *	lru_lock
- *	  b_lock (trylock due to inversion)
- *
- * xfs_buftarg_isolate
- *	lru_lock
- *	  b_lock (trylock due to inversion)
- */
 
 static inline int
 xfs_buf_is_vmapped(
@@ -1009,18 +983,8 @@ xfs_buf_rele(
 
 	ASSERT(atomic_read(&bp->b_hold) > 0);
 
-	/*
-	 * We grab the b_lock here first to serialise racing xfs_buf_rele()
-	 * calls. The pag_buf_lock being taken on the last reference only
-	 * serialises against racing lookups in xfs_buf_find(). IOWs, the second
-	 * to last reference we drop here is not serialised against the last
-	 * reference until we take bp->b_lock. Hence if we don't grab b_lock
-	 * first, the last "release" reference can win the race to the lock and
-	 * free the buffer before the second-to-last reference is processed,
-	 * leading to a use-after-free scenario.
-	 */
-	spin_lock(&bp->b_lock);
 	release = atomic_dec_and_lock(&bp->b_hold, &pag->pag_buf_lock);
+	spin_lock(&bp->b_lock);
 	if (!release) {
 		/*
 		 * Drop the in-flight state if the buffer is already on the LRU
@@ -1738,7 +1702,7 @@ xfs_buftarg_isolate(
 	 * zero. If the value is already zero, we need to reclaim the
 	 * buffer, otherwise it gets another trip through the LRU.
 	 */
-	if (atomic_add_unless(&bp->b_lru_ref, -1, 0)) {
+	if (!atomic_add_unless(&bp->b_lru_ref, -1, 0)) {
 		spin_unlock(&bp->b_lock);
 		return LRU_ROTATE;
 	}
@@ -1849,27 +1813,22 @@ xfs_alloc_buftarg(
 	btp->bt_daxdev = dax_dev;
 
 	if (xfs_setsize_buftarg_early(btp, bdev))
-		goto error_free;
+		goto error;
 
 	if (list_lru_init(&btp->bt_lru))
-		goto error_free;
+		goto error;
 
 	if (percpu_counter_init(&btp->bt_io_count, 0, GFP_KERNEL))
-		goto error_lru;
+		goto error;
 
 	btp->bt_shrinker.count_objects = xfs_buftarg_shrink_count;
 	btp->bt_shrinker.scan_objects = xfs_buftarg_shrink_scan;
 	btp->bt_shrinker.seeks = DEFAULT_SEEKS;
 	btp->bt_shrinker.flags = SHRINKER_NUMA_AWARE;
-	if (register_shrinker(&btp->bt_shrinker))
-		goto error_pcpu;
+	register_shrinker(&btp->bt_shrinker);
 	return btp;
 
-error_pcpu:
-	percpu_counter_destroy(&btp->bt_io_count);
-error_lru:
-	list_lru_destroy(&btp->bt_lru);
-error_free:
+error:
 	kmem_free(btp);
 	return NULL;
 }

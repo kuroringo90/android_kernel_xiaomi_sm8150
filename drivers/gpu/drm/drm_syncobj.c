@@ -96,8 +96,6 @@ static int drm_syncobj_fence_get_or_add_callback(struct drm_syncobj *syncobj,
 {
 	int ret;
 
-	WARN_ON(*fence);
-
 	*fence = drm_syncobj_fence_get(syncobj);
 	if (*fence)
 		return 1;
@@ -330,11 +328,28 @@ static const struct file_operations drm_syncobj_file_fops = {
 	.release = drm_syncobj_file_release,
 };
 
+static int drm_syncobj_alloc_file(struct drm_syncobj *syncobj)
+{
+	struct file *file = anon_inode_getfile("syncobj_file",
+					       &drm_syncobj_file_fops,
+					       syncobj, 0);
+	if (IS_ERR(file))
+		return PTR_ERR(file);
+
+	drm_syncobj_get(syncobj);
+	if (cmpxchg(&syncobj->file, NULL, file)) {
+		/* lost the race */
+		fput(file);
+	}
+
+	return 0;
+}
+
 static int drm_syncobj_handle_to_fd(struct drm_file *file_private,
 				    u32 handle, int *p_fd)
 {
 	struct drm_syncobj *syncobj = drm_syncobj_find(file_private, handle);
-	struct file *file;
+	int ret;
 	int fd;
 
 	if (!syncobj)
@@ -346,39 +361,46 @@ static int drm_syncobj_handle_to_fd(struct drm_file *file_private,
 		return fd;
 	}
 
-	file = anon_inode_getfile("syncobj_file",
-				  &drm_syncobj_file_fops,
-				  syncobj, 0);
-	if (IS_ERR(file)) {
-		put_unused_fd(fd);
-		drm_syncobj_put(syncobj);
-		return PTR_ERR(file);
+	if (!syncobj->file) {
+		ret = drm_syncobj_alloc_file(syncobj);
+		if (ret)
+			goto out_put_fd;
 	}
-
-	fd_install(fd, file);
-
+	fd_install(fd, syncobj->file);
+	drm_syncobj_put(syncobj);
 	*p_fd = fd;
 	return 0;
+out_put_fd:
+	put_unused_fd(fd);
+	drm_syncobj_put(syncobj);
+	return ret;
 }
+
+static struct drm_syncobj *drm_syncobj_fdget(int fd)
+{
+	struct file *file = fget(fd);
+
+	if (!file)
+		return NULL;
+	if (file->f_op != &drm_syncobj_file_fops)
+		goto err;
+
+	return file->private_data;
+err:
+	fput(file);
+	return NULL;
+};
 
 static int drm_syncobj_fd_to_handle(struct drm_file *file_private,
 				    int fd, u32 *handle)
 {
-	struct drm_syncobj *syncobj;
-	struct file *file;
+	struct drm_syncobj *syncobj = drm_syncobj_fdget(fd);
 	int ret;
 
-	file = fget(fd);
-	if (!file)
+	if (!syncobj)
 		return -EINVAL;
-
-	if (file->f_op != &drm_syncobj_file_fops) {
-		fput(file);
-		return -EINVAL;
-	}
 
 	/* take a reference to put in the idr */
-	syncobj = file->private_data;
 	drm_syncobj_get(syncobj);
 
 	idr_preload(GFP_KERNEL);
@@ -387,14 +409,12 @@ static int drm_syncobj_fd_to_handle(struct drm_file *file_private,
 	spin_unlock(&file_private->syncobj_table_lock);
 	idr_preload_end();
 
-	if (ret > 0) {
-		*handle = ret;
-		ret = 0;
-	} else
-		drm_syncobj_put(syncobj);
-
-	fput(file);
-	return ret;
+	if (ret < 0) {
+		fput(syncobj->file);
+		return ret;
+	}
+	*handle = ret;
+	return 0;
 }
 
 int drm_syncobj_import_sync_file_fence(struct drm_file *file_private,
@@ -657,9 +677,6 @@ static signed long drm_syncobj_array_wait_timeout(struct drm_syncobj **syncobjs,
 
 	if (flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT) {
 		for (i = 0; i < count; ++i) {
-			if (entries[i].fence)
-				continue;
-
 			drm_syncobj_fence_get_or_add_callback(syncobjs[i],
 							      &entries[i].fence,
 							      &entries[i].syncobj_cb,

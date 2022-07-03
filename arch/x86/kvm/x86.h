@@ -12,7 +12,6 @@
 
 static inline void kvm_clear_exception_queue(struct kvm_vcpu *vcpu)
 {
-	vcpu->arch.exception.pending = false;
 	vcpu->arch.exception.injected = false;
 }
 
@@ -94,11 +93,6 @@ static inline int is_paging(struct kvm_vcpu *vcpu)
 	return likely(kvm_read_cr0_bits(vcpu, X86_CR0_PG));
 }
 
-static inline bool is_pae_paging(struct kvm_vcpu *vcpu)
-{
-	return !is_long_mode(vcpu) && is_pae(vcpu) && is_paging(vcpu);
-}
-
 static inline u32 bit(int bitno)
 {
 	return 1 << (bitno & 31);
@@ -141,11 +135,6 @@ static inline bool emul_is_noncanonical_address(u64 la,
 static inline void vcpu_cache_mmio_info(struct kvm_vcpu *vcpu,
 					gva_t gva, gfn_t gfn, unsigned access)
 {
-	u64 gen = kvm_memslots(vcpu->kvm)->generation;
-
-	if (unlikely(gen & 1))
-		return;
-
 	/*
 	 * If this is a shadow nested page table, the "GVA" is
 	 * actually a nGPA.
@@ -153,7 +142,7 @@ static inline void vcpu_cache_mmio_info(struct kvm_vcpu *vcpu,
 	vcpu->arch.mmio_gva = mmu_is_nested(vcpu) ? 0 : gva & PAGE_MASK;
 	vcpu->arch.access = access;
 	vcpu->arch.mmio_gfn = gfn;
-	vcpu->arch.mmio_gen = gen;
+	vcpu->arch.mmio_gen = kvm_memslots(vcpu->kvm)->generation;
 }
 
 static inline bool vcpu_match_mmio_gen(struct kvm_vcpu *vcpu)
@@ -223,11 +212,11 @@ int kvm_inject_realmode_interrupt(struct kvm_vcpu *vcpu, int irq, int inc_eip);
 void kvm_write_tsc(struct kvm_vcpu *vcpu, struct msr_data *msr);
 u64 get_kvmclock_ns(struct kvm *kvm);
 
-int kvm_read_guest_virt(struct kvm_vcpu *vcpu,
+int kvm_read_guest_virt(struct x86_emulate_ctxt *ctxt,
 	gva_t addr, void *val, unsigned int bytes,
 	struct x86_exception *exception);
 
-int kvm_write_guest_virt_system(struct kvm_vcpu *vcpu,
+int kvm_write_guest_virt_system(struct x86_emulate_ctxt *ctxt,
 	gva_t addr, void *val, unsigned int bytes,
 	struct x86_exception *exception);
 

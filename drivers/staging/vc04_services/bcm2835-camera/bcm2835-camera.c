@@ -580,7 +580,6 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 static void stop_streaming(struct vb2_queue *vq)
 {
 	int ret;
-	unsigned long timeout;
 	struct bm2835_mmal_dev *dev = vb2_get_drv_priv(vq);
 
 	v4l2_dbg(1, bcm2835_v4l2_debug, &dev->v4l2_dev, "%s: dev:%p\n",
@@ -606,10 +605,10 @@ static void stop_streaming(struct vb2_queue *vq)
 				      sizeof(dev->capture.frame_count));
 
 	/* wait for last frame to complete */
-	timeout = wait_for_completion_timeout(&dev->capture.frame_cmplt, HZ);
-	if (timeout == 0)
+	ret = wait_for_completion_timeout(&dev->capture.frame_cmplt, HZ);
+	if (ret <= 0)
 		v4l2_err(&dev->v4l2_dev,
-			 "timed out waiting for frame completion\n");
+			 "error %d waiting for frame completion\n", ret);
 
 	v4l2_dbg(1, bcm2835_v4l2_debug, &dev->v4l2_dev,
 		 "disabling connection\n");
@@ -1849,12 +1848,6 @@ static int __init bm2835_mmal_init(void)
 	num_cameras = get_num_cameras(instance,
 				      resolutions,
 				      MAX_BCM2835_CAMERAS);
-
-	if (num_cameras < 1) {
-		ret = -ENODEV;
-		goto cleanup_mmal;
-	}
-
 	if (num_cameras > MAX_BCM2835_CAMERAS)
 		num_cameras = MAX_BCM2835_CAMERAS;
 
@@ -1953,9 +1946,6 @@ cleanup_gdev:
 	}
 	pr_info("%s: error %d while loading driver\n",
 		BM2835_MMAL_MODULE_NAME, ret);
-
-cleanup_mmal:
-	vchiq_mmal_finalise(instance);
 
 	return ret;
 }

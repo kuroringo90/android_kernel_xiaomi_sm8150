@@ -17,17 +17,11 @@ struct block_device;
 struct io_context;
 struct cgroup_subsys_state;
 typedef void (bio_end_io_t) (struct bio *);
-struct bio_crypt_ctx;
 
 /*
  * Block error status values.  See block/blk-core:blk_errors for the details.
- * Alpha cannot write a byte atomically, so we need to use 32-bit value.
  */
-#if defined(CONFIG_ALPHA) && !defined(__alpha_bwx__)
-typedef u32 __bitwise blk_status_t;
-#else
 typedef u8 __bitwise blk_status_t;
-#endif
 #define	BLK_STS_OK 0
 #define BLK_STS_NOTSUPP		((__force blk_status_t)1)
 #define BLK_STS_TIMEOUT		((__force blk_status_t)2)
@@ -56,6 +50,8 @@ struct blk_issue_stat {
 struct bio {
 	struct bio		*bi_next;	/* request queue link */
 	struct gendisk		*bi_disk;
+	u8			bi_partno;
+	blk_status_t		bi_status;
 	unsigned int		bi_opf;		/* bottom bits req flags,
 						 * top bits REQ_OP. Use
 						 * accessors.
@@ -63,8 +59,8 @@ struct bio {
 	unsigned short		bi_flags;	/* status, etc and bvec pool number */
 	unsigned short		bi_ioprio;
 	unsigned short		bi_write_hint;
-	blk_status_t		bi_status;
-	u8			bi_partno;
+
+	struct bvec_iter	bi_iter;
 
 	/* Number of segments in this BIO after
 	 * physical address coalescing is performed.
@@ -78,9 +74,8 @@ struct bio {
 	unsigned int		bi_seg_front_size;
 	unsigned int		bi_seg_back_size;
 
-	struct bvec_iter	bi_iter;
-
 	atomic_t		__bi_remaining;
+
 	bio_end_io_t		*bi_end_io;
 
 	void			*bi_private;
@@ -96,14 +91,6 @@ struct bio {
 	struct blk_issue_stat	bi_issue_stat;
 #endif
 #endif
-
-#ifdef CONFIG_BLK_INLINE_ENCRYPTION
-	struct bio_crypt_ctx	*bi_crypt_context;
-#if IS_ENABLED(CONFIG_DM_DEFAULT_KEY)
-	bool			bi_skip_dm_default_key;
-#endif
-#endif
-
 	union {
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 		struct bio_integrity_payload *bi_integrity; /* data integrity */
@@ -142,16 +129,13 @@ struct bio {
 #define BIO_BOUNCED	3	/* bio is a bounce bio */
 #define BIO_USER_MAPPED 4	/* contains user pages */
 #define BIO_NULL_MAPPED 5	/* contains invalid user pages */
-#define BIO_WORKINGSET	6	/* contains userspace workingset pages */
-#define BIO_QUIET	7	/* Make BIO Quiet */
-#define BIO_CHAIN	8	/* chained bio, ->bi_remaining in effect */
-#define BIO_REFFED	9	/* bio has elevated ->bi_cnt */
-#define BIO_THROTTLED	10	/* This bio has already been subjected to
+#define BIO_QUIET	6	/* Make BIO Quiet */
+#define BIO_CHAIN	7	/* chained bio, ->bi_remaining in effect */
+#define BIO_REFFED	8	/* bio has elevated ->bi_cnt */
+#define BIO_THROTTLED	9	/* This bio has already been subjected to
 				 * throttling rules. Don't do it again. */
-#define BIO_TRACE_COMPLETION 11	/* bio_endio() should trace the final completion
+#define BIO_TRACE_COMPLETION 10	/* bio_endio() should trace the final completion
 				 * of this bio. */
-#define BIO_QUEUE_ENTERED 11	/* can use blk_queue_enter_live() */
-
 /* See BVEC_POOL_OFFSET below before adding new flags */
 
 /*
@@ -242,17 +226,10 @@ enum req_flag_bits {
 	__REQ_RAHEAD,		/* read ahead, can fail anytime */
 	__REQ_BACKGROUND,	/* background IO */
 
-	__REQ_SORTED = __REQ_RAHEAD, /* elevator knows about this request */
 	/* command specific flags for REQ_OP_WRITE_ZEROES: */
 	__REQ_NOUNMAP,		/* do not free blocks when zeroing */
 
-	__REQ_URGENT,		/* urgent request */
 	__REQ_NOWAIT,           /* Don't wait if request will block */
-	/*
-	 * set for "ide_preempt" requests and also for requests for which the
-	 * SCSI "quiesce" state must be ignored.
-	 */
-	__REQ_PREEMPT,
 	__REQ_NR_BITS,		/* stops here */
 };
 
@@ -262,7 +239,6 @@ enum req_flag_bits {
 #define REQ_SYNC		(1ULL << __REQ_SYNC)
 #define REQ_META		(1ULL << __REQ_META)
 #define REQ_PRIO		(1ULL << __REQ_PRIO)
-#define REQ_URGENT		(1ULL << __REQ_URGENT)
 #define REQ_NOMERGE		(1ULL << __REQ_NOMERGE)
 #define REQ_IDLE		(1ULL << __REQ_IDLE)
 #define REQ_INTEGRITY		(1ULL << __REQ_INTEGRITY)
@@ -273,7 +249,6 @@ enum req_flag_bits {
 
 #define REQ_NOUNMAP		(1ULL << __REQ_NOUNMAP)
 #define REQ_NOWAIT		(1ULL << __REQ_NOWAIT)
-#define REQ_PREEMPT		(1ULL << __REQ_PREEMPT)
 
 #define REQ_FAILFAST_MASK \
 	(REQ_FAILFAST_DEV | REQ_FAILFAST_TRANSPORT | REQ_FAILFAST_DRIVER)

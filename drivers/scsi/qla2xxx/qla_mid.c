@@ -152,15 +152,10 @@ qla24xx_disable_vp(scsi_qla_host_t *vha)
 {
 	unsigned long flags;
 	int ret;
-	fc_port_t *fcport;
 
 	ret = qla24xx_control_vp(vha, VCE_COMMAND_DISABLE_VPS_LOGO_ALL);
 	atomic_set(&vha->loop_state, LOOP_DOWN);
 	atomic_set(&vha->loop_down_timer, LOOP_DOWN_TIME);
-	list_for_each_entry(fcport, &vha->vp_fcports, list)
-		fcport->logout_on_delete = 0;
-
-	qla2x00_mark_all_devices_lost(vha, 0);
 
 	/* Remove port id from vp target map */
 	spin_lock_irqsave(&vha->hw->vport_slock, flags);
@@ -348,21 +343,15 @@ qla2x00_do_dpc_vp(scsi_qla_host_t *vha)
 		    "FCPort update end.\n");
 	}
 
-	if (test_bit(RELOGIN_NEEDED, &vha->dpc_flags) &&
-	    !test_bit(LOOP_RESYNC_NEEDED, &vha->dpc_flags) &&
-	    atomic_read(&vha->loop_state) != LOOP_DOWN) {
+	if ((test_and_clear_bit(RELOGIN_NEEDED, &vha->dpc_flags)) &&
+		!test_bit(LOOP_RESYNC_NEEDED, &vha->dpc_flags) &&
+		atomic_read(&vha->loop_state) != LOOP_DOWN) {
 
-		if (!vha->relogin_jif ||
-		    time_after_eq(jiffies, vha->relogin_jif)) {
-			vha->relogin_jif = jiffies + HZ;
-			clear_bit(RELOGIN_NEEDED, &vha->dpc_flags);
-
-			ql_dbg(ql_dbg_dpc, vha, 0x4018,
-			    "Relogin needed scheduled.\n");
-			qla2x00_relogin(vha);
-			ql_dbg(ql_dbg_dpc, vha, 0x4019,
-			    "Relogin needed end.\n");
-		}
+		ql_dbg(ql_dbg_dpc, vha, 0x4018,
+		    "Relogin needed scheduled.\n");
+		qla2x00_relogin(vha);
+		ql_dbg(ql_dbg_dpc, vha, 0x4019,
+		    "Relogin needed end.\n");
 	}
 
 	if (test_and_clear_bit(RESET_MARKER_NEEDED, &vha->dpc_flags) &&
@@ -580,16 +569,14 @@ qla25xx_free_rsp_que(struct scsi_qla_host *vha, struct rsp_que *rsp)
 int
 qla25xx_delete_req_que(struct scsi_qla_host *vha, struct req_que *req)
 {
-	int ret = QLA_SUCCESS;
+	int ret = -1;
 
-	if (req && vha->flags.qpairs_req_created) {
+	if (req) {
 		req->options |= BIT_0;
 		ret = qla25xx_init_req_que(vha, req);
-		if (ret != QLA_SUCCESS)
-			return QLA_FUNCTION_FAILED;
-
-		qla25xx_free_req_que(vha, req);
 	}
+	if (ret == QLA_SUCCESS)
+		qla25xx_free_req_que(vha, req);
 
 	return ret;
 }
@@ -597,16 +584,14 @@ qla25xx_delete_req_que(struct scsi_qla_host *vha, struct req_que *req)
 int
 qla25xx_delete_rsp_que(struct scsi_qla_host *vha, struct rsp_que *rsp)
 {
-	int ret = QLA_SUCCESS;
+	int ret = -1;
 
-	if (rsp && vha->flags.qpairs_rsp_created) {
+	if (rsp) {
 		rsp->options |= BIT_0;
 		ret = qla25xx_init_rsp_que(vha, rsp);
-		if (ret != QLA_SUCCESS)
-			return QLA_FUNCTION_FAILED;
-
-		qla25xx_free_rsp_que(vha, rsp);
 	}
+	if (ret == QLA_SUCCESS)
+		qla25xx_free_rsp_que(vha, rsp);
 
 	return ret;
 }

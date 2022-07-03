@@ -846,13 +846,10 @@ mpt3sas_transport_port_remove(struct MPT3SAS_ADAPTER *ioc, u64 sas_address,
 			    mpt3sas_port->remote_identify.sas_address,
 			    mpt3sas_phy->phy_id);
 		mpt3sas_phy->phy_belongs_to_port = 0;
-		if (!ioc->remove_host)
-			sas_port_delete_phy(mpt3sas_port->port,
-						mpt3sas_phy->phy);
+		sas_port_delete_phy(mpt3sas_port->port, mpt3sas_phy->phy);
 		list_del(&mpt3sas_phy->port_siblings);
 	}
-	if (!ioc->remove_host)
-		sas_port_delete(mpt3sas_port->port);
+	sas_port_delete(mpt3sas_port->port);
 	kfree(mpt3sas_port);
 }
 
@@ -1939,12 +1936,12 @@ _transport_smp_handler(struct bsg_job *job, struct Scsi_Host *shost,
 		pr_info(MPT3SAS_FMT "%s: host reset in progress!\n",
 		    __func__, ioc->name);
 		rc = -EFAULT;
-		goto job_done;
+		goto out;
 	}
 
 	rc = mutex_lock_interruptible(&ioc->transport_cmds.mutex);
 	if (rc)
-		goto job_done;
+		goto out;
 
 	if (ioc->transport_cmds.status != MPT3_CMD_NOT_USED) {
 		pr_err(MPT3SAS_FMT "%s: transport_cmds in use\n", ioc->name,
@@ -2069,7 +2066,6 @@ _transport_smp_handler(struct bsg_job *job, struct Scsi_Host *shost,
  out:
 	ioc->transport_cmds.status = MPT3_CMD_NOT_USED;
 	mutex_unlock(&ioc->transport_cmds.mutex);
-job_done:
 	bsg_job_done(job, rc, reslen);
 }
 

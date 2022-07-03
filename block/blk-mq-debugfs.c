@@ -266,7 +266,6 @@ static const char *const cmd_flag_name[] = {
 	CMD_FLAG_NAME(BACKGROUND),
 	CMD_FLAG_NAME(NOUNMAP),
 	CMD_FLAG_NAME(NOWAIT),
-	CMD_FLAG_NAME(PREEMPT),
 };
 #undef CMD_FLAG_NAME
 
@@ -280,6 +279,7 @@ static const char *const rqf_name[] = {
 	RQF_NAME(MIXED_MERGE),
 	RQF_NAME(MQ_INFLIGHT),
 	RQF_NAME(DONTPREP),
+	RQF_NAME(PREEMPT),
 	RQF_NAME(COPY_USER),
 	RQF_NAME(FAILED),
 	RQF_NAME(QUIET),
@@ -704,11 +704,7 @@ static ssize_t blk_mq_debugfs_write(struct file *file, const char __user *buf,
 	const struct blk_mq_debugfs_attr *attr = m->private;
 	void *data = d_inode(file->f_path.dentry->d_parent)->i_private;
 
-	/*
-	 * Attributes that only implement .seq_ops are read-only and 'attr' is
-	 * the same with 'data' in this case.
-	 */
-	if (attr == data || !attr->write)
+	if (!attr->write)
 		return -EPERM;
 
 	return attr->write(data, buf, count, ppos);

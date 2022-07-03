@@ -23,7 +23,6 @@
 
 #include <linux/sched.h>
 #include <asm/cputype.h>
-#include <asm/mmu.h>
 
 /*
  * Raw TLBI operations.
@@ -41,33 +40,19 @@
 		   ALTERNATIVE("nop\n			nop",		       \
 			       "dsb ish\n		tlbi " #op,	       \
 			       ARM64_WORKAROUND_REPEAT_TLBI,		       \
-			       CONFIG_ARM64_WORKAROUND_REPEAT_TLBI)	       \
+			       CONFIG_QCOM_FALKOR_ERRATUM_1009)		       \
 			    : : )
 
 #define __TLBI_1(op, arg) asm ("tlbi " #op ", %0\n"			       \
 		   ALTERNATIVE("nop\n			nop",		       \
 			       "dsb ish\n		tlbi " #op ", %0",     \
 			       ARM64_WORKAROUND_REPEAT_TLBI,		       \
-			       CONFIG_ARM64_WORKAROUND_REPEAT_TLBI)	       \
+			       CONFIG_QCOM_FALKOR_ERRATUM_1009)		       \
 			    : : "r" (arg))
 
 #define __TLBI_N(op, arg, n, ...) __TLBI_##n(op, arg)
 
 #define __tlbi(op, ...)		__TLBI_N(op, ##__VA_ARGS__, 1, 0)
-
-#define __tlbi_user(op, arg) do {						\
-	if (arm64_kernel_unmapped_at_el0())					\
-		__tlbi(op, (arg) | USER_ASID_FLAG);				\
-} while (0)
-
-/* This macro creates a properly formatted VA operand for the TLBI */
-#define __TLBI_VADDR(addr, asid)				\
-	({							\
-		unsigned long __ta = (addr) >> 12;		\
-		__ta &= GENMASK_ULL(43, 0);			\
-		__ta |= (unsigned long)(asid) << 48;		\
-		__ta;						\
-	})
 
 /*
  *	TLB Management
@@ -126,22 +111,20 @@ static inline void flush_tlb_all(void)
 
 static inline void flush_tlb_mm(struct mm_struct *mm)
 {
-	unsigned long asid = __TLBI_VADDR(0, ASID(mm));
+	unsigned long asid = ASID(mm) << 48;
 
 	dsb(ishst);
 	__tlbi(aside1is, asid);
-	__tlbi_user(aside1is, asid);
 	dsb(ish);
 }
 
 static inline void flush_tlb_page(struct vm_area_struct *vma,
 				  unsigned long uaddr)
 {
-	unsigned long addr = __TLBI_VADDR(uaddr, ASID(vma->vm_mm));
+	unsigned long addr = uaddr >> 12 | (ASID(vma->vm_mm) << 48);
 
 	dsb(ishst);
 	__tlbi(vale1is, addr);
-	__tlbi_user(vale1is, addr);
 	dsb(ish);
 }
 
@@ -155,7 +138,7 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 				     unsigned long start, unsigned long end,
 				     bool last_level)
 {
-	unsigned long asid = ASID(vma->vm_mm);
+	unsigned long asid = ASID(vma->vm_mm) << 48;
 	unsigned long addr;
 
 	if ((end - start) > MAX_TLB_RANGE) {
@@ -163,18 +146,15 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 		return;
 	}
 
-	start = __TLBI_VADDR(start, asid);
-	end = __TLBI_VADDR(end, asid);
+	start = asid | (start >> 12);
+	end = asid | (end >> 12);
 
 	dsb(ishst);
 	for (addr = start; addr < end; addr += 1 << (PAGE_SHIFT - 12)) {
-		if (last_level) {
+		if (last_level)
 			__tlbi(vale1is, addr);
-			__tlbi_user(vale1is, addr);
-		} else {
+		else
 			__tlbi(vae1is, addr);
-			__tlbi_user(vae1is, addr);
-		}
 	}
 	dsb(ish);
 }
@@ -194,8 +174,8 @@ static inline void flush_tlb_kernel_range(unsigned long start, unsigned long end
 		return;
 	}
 
-	start = __TLBI_VADDR(start, 0);
-	end = __TLBI_VADDR(end, 0);
+	start >>= 12;
+	end >>= 12;
 
 	dsb(ishst);
 	for (addr = start; addr < end; addr += 1 << (PAGE_SHIFT - 12))
@@ -211,20 +191,12 @@ static inline void flush_tlb_kernel_range(unsigned long start, unsigned long end
 static inline void __flush_tlb_pgtable(struct mm_struct *mm,
 				       unsigned long uaddr)
 {
-	unsigned long addr = __TLBI_VADDR(uaddr, ASID(mm));
+	unsigned long addr = uaddr >> 12 | (ASID(mm) << 48);
 
 	__tlbi(vae1is, addr);
-	__tlbi_user(vae1is, addr);
 	dsb(ish);
 }
 
-static inline void __flush_tlb_kernel_pgtable(unsigned long kaddr)
-{
-	unsigned long addr = __TLBI_VADDR(kaddr, 0);
-
-	__tlbi(vaae1is, addr);
-	dsb(ish);
-}
 #endif
 
 #endif

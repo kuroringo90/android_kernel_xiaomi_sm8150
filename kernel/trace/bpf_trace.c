@@ -17,7 +17,7 @@
 
 /**
  * trace_call_bpf - invoke BPF program
- * @call: tracepoint event
+ * @prog: BPF program
  * @ctx: opaque context pointer
  *
  * kprobe handlers execute BPF programs via this helper.
@@ -29,7 +29,7 @@
  * 1 - store kprobe event into ring buffer
  * Other values are reserved and currently alias to 1
  */
-unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
+unsigned int trace_call_bpf(struct bpf_prog *prog, void *ctx)
 {
 	unsigned int ret;
 
@@ -49,22 +49,9 @@ unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 		goto out;
 	}
 
-	/*
-	 * Instead of moving rcu_read_lock/rcu_dereference/rcu_read_unlock
-	 * to all call sites, we did a bpf_prog_array_valid() there to check
-	 * whether call->prog_array is empty or not, which is
-	 * a heurisitc to speed up execution.
-	 *
-	 * If bpf_prog_array_valid() fetched prog_array was
-	 * non-NULL, we go into trace_call_bpf() and do the actual
-	 * proper rcu_dereference() under RCU lock.
-	 * If it turns out that prog_array is NULL then, we bail out.
-	 * For the opposite, if the bpf_prog_array_valid() fetched pointer
-	 * was NULL, you'll skip the prog_array with the risk of missing
-	 * out of events when it was updated in between this and the
-	 * rcu_dereference() which is accepted risk.
-	 */
-	ret = BPF_PROG_RUN_ARRAY_CHECK(call->prog_array, ctx, BPF_PROG_RUN);
+	rcu_read_lock();
+	ret = BPF_PROG_RUN(prog, ctx);
+	rcu_read_unlock();
 
  out:
 	__this_cpu_dec(bpf_prog_active);
@@ -174,13 +161,11 @@ BPF_CALL_5(bpf_trace_printk, char *, fmt, u32, fmt_size, u64, arg1,
 			i++;
 		} else if (fmt[i] == 'p' || fmt[i] == 's') {
 			mod[fmt_cnt]++;
-			/* disallow any further format extensions */
-			if (fmt[i + 1] != 0 &&
-			    !isspace(fmt[i + 1]) &&
-			    !ispunct(fmt[i + 1]))
+			i++;
+			if (!isspace(fmt[i]) && !ispunct(fmt[i]) && fmt[i] != 0)
 				return -EINVAL;
 			fmt_cnt++;
-			if (fmt[i] == 's') {
+			if (fmt[i - 1] == 's') {
 				if (str_seen)
 					/* allow only one '%s' per fmt string */
 					return -EINVAL;
@@ -308,13 +293,14 @@ static const struct bpf_func_proto bpf_perf_event_read_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
-static DEFINE_PER_CPU(struct perf_sample_data, bpf_trace_sd);
+static DEFINE_PER_CPU(struct perf_sample_data, bpf_sd);
 
 static __always_inline u64
 __bpf_perf_event_output(struct pt_regs *regs, struct bpf_map *map,
-			u64 flags, struct perf_sample_data *sd)
+			u64 flags, struct perf_raw_record *raw)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	struct perf_sample_data *sd = this_cpu_ptr(&bpf_sd);
 	unsigned int cpu = smp_processor_id();
 	u64 index = flags & BPF_F_INDEX_MASK;
 	struct bpf_event_entry *ee;
@@ -337,6 +323,8 @@ __bpf_perf_event_output(struct pt_regs *regs, struct bpf_map *map,
 	if (unlikely(event->oncpu != cpu))
 		return -EOPNOTSUPP;
 
+	perf_sample_data_init(sd, 0, 0);
+	sd->raw = raw;
 	perf_event_output(event, sd, regs);
 	return 0;
 }
@@ -344,7 +332,6 @@ __bpf_perf_event_output(struct pt_regs *regs, struct bpf_map *map,
 BPF_CALL_5(bpf_perf_event_output, struct pt_regs *, regs, struct bpf_map *, map,
 	   u64, flags, void *, data, u64, size)
 {
-	struct perf_sample_data *sd = this_cpu_ptr(&bpf_trace_sd);
 	struct perf_raw_record raw = {
 		.frag = {
 			.size = size,
@@ -355,10 +342,7 @@ BPF_CALL_5(bpf_perf_event_output, struct pt_regs *, regs, struct bpf_map *, map,
 	if (unlikely(flags & ~(BPF_F_INDEX_MASK)))
 		return -EINVAL;
 
-	perf_sample_data_init(sd, 0, 0);
-	sd->raw = &raw;
-
-	return __bpf_perf_event_output(regs, map, flags, sd);
+	return __bpf_perf_event_output(regs, map, flags, &raw);
 }
 
 static const struct bpf_func_proto bpf_perf_event_output_proto = {
@@ -373,12 +357,10 @@ static const struct bpf_func_proto bpf_perf_event_output_proto = {
 };
 
 static DEFINE_PER_CPU(struct pt_regs, bpf_pt_regs);
-static DEFINE_PER_CPU(struct perf_sample_data, bpf_misc_sd);
 
 u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 		     void *ctx, u64 ctx_size, bpf_ctx_copy_t ctx_copy)
 {
-	struct perf_sample_data *sd = this_cpu_ptr(&bpf_misc_sd);
 	struct pt_regs *regs = this_cpu_ptr(&bpf_pt_regs);
 	struct perf_raw_frag frag = {
 		.copy		= ctx_copy,
@@ -396,10 +378,8 @@ u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 	};
 
 	perf_fetch_caller_regs(regs);
-	perf_sample_data_init(sd, 0, 0);
-	sd->raw = &raw;
 
-	return __bpf_perf_event_output(regs, map, flags, sd);
+	return __bpf_perf_event_output(regs, map, flags, &raw);
 }
 
 BPF_CALL_0(bpf_get_current_task)
@@ -481,8 +461,6 @@ static const struct bpf_func_proto *tracing_func_proto(enum bpf_func_id func_id)
 		return &bpf_probe_read_proto;
 	case BPF_FUNC_ktime_get_ns:
 		return &bpf_ktime_get_ns_proto;
-	case BPF_FUNC_ktime_get_boot_ns:
-		return &bpf_ktime_get_boot_ns_proto;
 	case BPF_FUNC_tail_call:
 		return &bpf_tail_call_proto;
 	case BPF_FUNC_get_current_pid_tgid:
@@ -689,62 +667,3 @@ const struct bpf_verifier_ops perf_event_prog_ops = {
 	.is_valid_access	= pe_prog_is_valid_access,
 	.convert_ctx_access	= pe_prog_convert_ctx_access,
 };
-
-static DEFINE_MUTEX(bpf_event_mutex);
-
-int perf_event_attach_bpf_prog(struct perf_event *event,
-			       struct bpf_prog *prog)
-{
-	struct bpf_prog_array __rcu *old_array;
-	struct bpf_prog_array *new_array;
-	int ret = -EEXIST;
-
-	mutex_lock(&bpf_event_mutex);
-
-	if (event->prog)
-		goto out;
-
-	old_array = rcu_dereference_protected(event->tp_event->prog_array,
-					      lockdep_is_held(&bpf_event_mutex));
-	ret = bpf_prog_array_copy(old_array, NULL, prog, &new_array);
-	if (ret < 0)
-		goto out;
-
-	/* set the new array to event->tp_event and set event->prog */
-	event->prog = prog;
-	rcu_assign_pointer(event->tp_event->prog_array, new_array);
-	bpf_prog_array_free(old_array);
-
-out:
-	mutex_unlock(&bpf_event_mutex);
-	return ret;
-}
-
-void perf_event_detach_bpf_prog(struct perf_event *event)
-{
-	struct bpf_prog_array __rcu *old_array;
-	struct bpf_prog_array *new_array;
-	int ret;
-
-	mutex_lock(&bpf_event_mutex);
-
-	if (!event->prog)
-		goto out;
-
-	old_array = rcu_dereference_protected(event->tp_event->prog_array,
-					      lockdep_is_held(&bpf_event_mutex));
-
-	ret = bpf_prog_array_copy(old_array, event->prog, NULL, &new_array);
-	if (ret < 0) {
-		bpf_prog_array_delete_safe(old_array, event->prog);
-	} else {
-		rcu_assign_pointer(event->tp_event->prog_array, new_array);
-		bpf_prog_array_free(old_array);
-	}
-
-	bpf_prog_put(event->prog);
-	event->prog = NULL;
-
-out:
-	mutex_unlock(&bpf_event_mutex);
-}

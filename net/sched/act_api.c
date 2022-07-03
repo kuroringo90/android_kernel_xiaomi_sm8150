@@ -133,10 +133,8 @@ static int tcf_dump_walker(struct tcf_idrinfo *idrinfo, struct sk_buff *skb,
 			continue;
 
 		nest = nla_nest_start(skb, n_i);
-		if (!nest) {
-			index--;
+		if (!nest)
 			goto nla_put_failure;
-		}
 		err = tcf_action_dump_1(skb, p, 0, 0);
 		if (err < 0) {
 			index--;
@@ -482,24 +480,15 @@ int tcf_action_exec(struct sk_buff *skb, struct tc_action **actions,
 restart_act_graph:
 	for (i = 0; i < nr_actions; i++) {
 		const struct tc_action *a = actions[i];
-		int repeat_ttl;
 
 		if (jmp_prgcnt > 0) {
 			jmp_prgcnt -= 1;
 			continue;
 		}
-
-		repeat_ttl = 32;
 repeat:
 		ret = a->ops->act(skb, a, res);
-
-		if (unlikely(ret == TC_ACT_REPEAT)) {
-			if (--repeat_ttl != 0)
-				goto repeat;
-			/* suspicious opcode, stop pipeline */
-			net_warn_ratelimited("TC_ACT_REPEAT abuse ?\n");
-			return TC_ACT_OK;
-		}
+		if (ret == TC_ACT_REPEAT)
+			goto repeat;	/* we need a ttl - JHS */
 
 		if (TC_ACT_EXT_CMP(ret, TC_ACT_JUMP)) {
 			jmp_prgcnt = ret & TCA_ACT_MAX_PRIO_MASK;
@@ -1081,16 +1070,10 @@ tcf_add_notify(struct net *net, struct nlmsghdr *n, struct list_head *actions,
 static int tcf_action_add(struct net *net, struct nlattr *nla,
 			  struct nlmsghdr *n, u32 portid, int ovr)
 {
-	int loop, ret;
+	int ret = 0;
 	LIST_HEAD(actions);
 
-	for (loop = 0; loop < 10; loop++) {
-		ret = tcf_action_init(net, NULL, nla, NULL, NULL, ovr, 0,
-				      &actions);
-		if (ret != -EAGAIN)
-			break;
-	}
-
+	ret = tcf_action_init(net, NULL, nla, NULL, NULL, ovr, 0, &actions);
 	if (ret)
 		return ret;
 
@@ -1137,7 +1120,10 @@ static int tc_ctl_action(struct sk_buff *skb, struct nlmsghdr *n,
 		 */
 		if (n->nlmsg_flags & NLM_F_REPLACE)
 			ovr = 1;
+replay:
 		ret = tcf_action_add(net, tca[TCA_ACT_TAB], n, portid, ovr);
+		if (ret == -EAGAIN)
+			goto replay;
 		break;
 	case RTM_DELACTION:
 		ret = tca_action_gd(net, tca[TCA_ACT_TAB], n,

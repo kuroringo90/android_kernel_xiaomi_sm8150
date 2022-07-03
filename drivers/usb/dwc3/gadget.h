@@ -33,7 +33,7 @@ struct dwc3;
 #define DWC3_DEPCFG_XFER_IN_PROGRESS_EN	BIT(9)
 #define DWC3_DEPCFG_XFER_NOT_READY_EN	BIT(10)
 #define DWC3_DEPCFG_FIFO_ERROR_EN	BIT(11)
-#define DWC3_DEPCFG_STREAM_EVENT_EN	BIT(13)
+#define DWC3_DEPCFG_STREAM_EVENT_EN	BIT(12)
 #define DWC3_DEPCFG_BINTERVAL_M1(n)	(((n) & 0xff) << 16)
 #define DWC3_DEPCFG_STREAM_CAPABLE	BIT(24)
 #define DWC3_DEPCFG_EP_NUMBER(n)	(((n) & 0x1f) << 25)
@@ -60,8 +60,6 @@ struct dwc3;
 
 #define to_dwc3_request(r)	(container_of(r, struct dwc3_request, request))
 
-irqreturn_t dwc3_interrupt(int irq, void *_dwc);
-void dwc3_bh_work(struct work_struct *w);
 /**
  * next_request - gets the next request on the given list
  * @list: the request list to operate on
@@ -89,46 +87,17 @@ static inline void dwc3_gadget_move_started_request(struct dwc3_request *req)
 	list_move_tail(&req->list, &dep->started_list);
 }
 
-static inline void dwc3_gadget_move_pending_list_front(struct dwc3_request *req)
-{
-	struct dwc3_ep		*dep = req->dep;
-
-	req->started = false;
-	list_move(&req->list, &dep->pending_list);
-}
-
-static inline enum dwc3_link_state dwc3_get_link_state(struct dwc3 *dwc)
-{
-	u32 reg;
-
-	reg = dwc3_readl(dwc->regs, DWC3_DSTS);
-	return DWC3_DSTS_USBLNKST(reg);
-}
-
 void dwc3_gadget_giveback(struct dwc3_ep *dep, struct dwc3_request *req,
 		int status);
 
 void dwc3_ep0_interrupt(struct dwc3 *dwc,
 		const struct dwc3_event_depevt *event);
 void dwc3_ep0_out_start(struct dwc3 *dwc);
-void dwc3_ep0_end_control_data(struct dwc3 *dwc, struct dwc3_ep *dep);
-void dwc3_ep0_stall_and_restart(struct dwc3 *dwc);
 int __dwc3_gadget_ep0_set_halt(struct usb_ep *ep, int value);
 int dwc3_gadget_ep0_set_halt(struct usb_ep *ep, int value);
 int dwc3_gadget_ep0_queue(struct usb_ep *ep, struct usb_request *request,
 		gfp_t gfp_flags);
 int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value, int protocol);
-int dwc3_stop_active_transfer(struct dwc3 *dwc, u32 epnum, bool force);
-void dwc3_ep_inc_enq(struct dwc3_ep *dep);
-void dwc3_ep_inc_deq(struct dwc3_ep *dep);
-
-static inline dma_addr_t dwc3_trb_dma_offset(struct dwc3_ep *dep,
-		struct dwc3_trb *trb)
-{
-	u32 offset = (char *) trb - (char *) dep->trb_pool;
-
-	return dep->trb_pool_dma + offset;
-}
 
 /**
  * dwc3_gadget_ep_get_transfer_index - Gets transfer index from HW

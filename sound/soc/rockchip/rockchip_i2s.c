@@ -188,9 +188,7 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 {
 	struct rk_i2s_dev *i2s = to_info(cpu_dai);
 	unsigned int mask = 0, val = 0;
-	int ret = 0;
 
-	pm_runtime_get_sync(cpu_dai->dev);
 	mask = I2S_CKR_MSS_MASK;
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
 	case SND_SOC_DAIFMT_CBS_CFS:
@@ -203,8 +201,7 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 		i2s->is_master_mode = false;
 		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_CKR, mask, val);
@@ -218,8 +215,7 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 		val = I2S_CKR_CKP_POS;
 		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_CKR, mask, val);
@@ -235,15 +231,14 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 	case SND_SOC_DAIFMT_I2S:
 		val = I2S_TXCR_IBM_NORMAL;
 		break;
-	case SND_SOC_DAIFMT_DSP_A: /* PCM delay 1 bit mode */
-		val = I2S_TXCR_TFS_PCM | I2S_TXCR_PBM_MODE(1);
-		break;
-	case SND_SOC_DAIFMT_DSP_B: /* PCM no delay mode */
+	case SND_SOC_DAIFMT_DSP_A: /* PCM no delay mode */
 		val = I2S_TXCR_TFS_PCM;
 		break;
+	case SND_SOC_DAIFMT_DSP_B: /* PCM delay 1 mode */
+		val = I2S_TXCR_TFS_PCM | I2S_TXCR_PBM_MODE(1);
+		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_TXCR, mask, val);
@@ -259,23 +254,19 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 	case SND_SOC_DAIFMT_I2S:
 		val = I2S_RXCR_IBM_NORMAL;
 		break;
-	case SND_SOC_DAIFMT_DSP_A: /* PCM delay 1 bit mode */
-		val = I2S_RXCR_TFS_PCM | I2S_RXCR_PBM_MODE(1);
-		break;
-	case SND_SOC_DAIFMT_DSP_B: /* PCM no delay mode */
+	case SND_SOC_DAIFMT_DSP_A: /* PCM no delay mode */
 		val = I2S_RXCR_TFS_PCM;
 		break;
+	case SND_SOC_DAIFMT_DSP_B: /* PCM delay 1 mode */
+		val = I2S_RXCR_TFS_PCM | I2S_RXCR_PBM_MODE(1);
+		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_RXCR, mask, val);
 
-err_pm_put:
-	pm_runtime_put(cpu_dai->dev);
-
-	return ret;
+	return 0;
 }
 
 static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
@@ -513,7 +504,6 @@ static bool rockchip_i2s_rd_reg(struct device *dev, unsigned int reg)
 	case I2S_INTCR:
 	case I2S_XFER:
 	case I2S_CLR:
-	case I2S_TXDR:
 	case I2S_RXDR:
 	case I2S_FIFOLR:
 	case I2S_INTSR:
@@ -528,9 +518,6 @@ static bool rockchip_i2s_volatile_reg(struct device *dev, unsigned int reg)
 	switch (reg) {
 	case I2S_INTSR:
 	case I2S_CLR:
-	case I2S_FIFOLR:
-	case I2S_TXDR:
-	case I2S_RXDR:
 		return true;
 	default:
 		return false;
@@ -540,8 +527,6 @@ static bool rockchip_i2s_volatile_reg(struct device *dev, unsigned int reg)
 static bool rockchip_i2s_precious_reg(struct device *dev, unsigned int reg)
 {
 	switch (reg) {
-	case I2S_RXDR:
-		return true;
 	default:
 		return false;
 	}
@@ -685,7 +670,7 @@ static int rockchip_i2s_probe(struct platform_device *pdev)
 	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not register PCM\n");
-		goto err_suspend;
+		return ret;
 	}
 
 	return 0;

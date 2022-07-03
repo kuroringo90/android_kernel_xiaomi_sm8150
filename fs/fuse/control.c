@@ -107,7 +107,7 @@ static ssize_t fuse_conn_max_background_read(struct file *file,
 	if (!fc)
 		return 0;
 
-	val = READ_ONCE(fc->max_background);
+	val = fc->max_background;
 	fuse_conn_put(fc);
 
 	return fuse_conn_limit_read(file, buf, len, ppos, val);
@@ -144,7 +144,7 @@ static ssize_t fuse_conn_congestion_threshold_read(struct file *file,
 	if (!fc)
 		return 0;
 
-	val = READ_ONCE(fc->congestion_threshold);
+	val = fc->congestion_threshold;
 	fuse_conn_put(fc);
 
 	return fuse_conn_limit_read(file, buf, len, ppos, val);
@@ -211,11 +211,10 @@ static struct dentry *fuse_ctl_add_dentry(struct dentry *parent,
 	if (!dentry)
 		return NULL;
 
+	fc->ctl_dentry[fc->ctl_ndents++] = dentry;
 	inode = new_inode(fuse_control_sb);
-	if (!inode) {
-		dput(dentry);
+	if (!inode)
 		return NULL;
-	}
 
 	inode->i_ino = get_next_ino();
 	inode->i_mode = mode;
@@ -229,9 +228,6 @@ static struct dentry *fuse_ctl_add_dentry(struct dentry *parent,
 	set_nlink(inode, nlink);
 	inode->i_private = fc;
 	d_add(dentry, inode);
-
-	fc->ctl_dentry[fc->ctl_ndents++] = dentry;
-
 	return dentry;
 }
 
@@ -288,10 +284,7 @@ void fuse_ctl_remove_conn(struct fuse_conn *fc)
 	for (i = fc->ctl_ndents - 1; i >= 0; i--) {
 		struct dentry *dentry = fc->ctl_dentry[i];
 		d_inode(dentry)->i_private = NULL;
-		if (!i) {
-			/* Get rid of submounts: */
-			d_invalidate(dentry);
-		}
+		d_drop(dentry);
 		dput(dentry);
 	}
 	drop_nlink(d_inode(fuse_control_sb->s_root));

@@ -24,9 +24,7 @@ static inline unsigned long long rdclock(void)
 	return ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
 
-#ifndef MAX_NR_CPUS
-#define MAX_NR_CPUS			2048
-#endif
+#define MAX_NR_CPUS			1024
 
 extern const char *input_name;
 extern bool perf_host, perf_guest;
@@ -52,7 +50,6 @@ struct record_opts {
 	bool	     sample_time_set;
 	bool	     sample_cpu;
 	bool	     period;
-	bool	     period_set;
 	bool	     running_time;
 	bool	     full_auxtrace;
 	bool	     auxtrace_snapshot_mode;

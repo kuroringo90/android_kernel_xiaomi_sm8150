@@ -491,9 +491,8 @@ static int brcmnand_revision_init(struct brcmnand_controller *ctrl)
 	} else {
 		ctrl->cs_offsets = brcmnand_cs_offsets;
 
-		/* v3.3-5.0 have a different CS0 offset layout */
-		if (ctrl->nand_version >= 0x0303 &&
-		    ctrl->nand_version <= 0x0500)
+		/* v5.0 and earlier has a different CS0 offset layout */
+		if (ctrl->nand_version <= 0x0500)
 			ctrl->cs0_offsets = brcmnand_cs_offsets_cs0;
 	}
 
@@ -587,54 +586,6 @@ static inline void brcmnand_write_fc(struct brcmnand_controller *ctrl,
 				     int word, u32 val)
 {
 	__raw_writel(val, ctrl->nand_fc + word * 4);
-}
-
-static void brcmnand_clear_ecc_addr(struct brcmnand_controller *ctrl)
-{
-
-	/* Clear error addresses */
-	brcmnand_write_reg(ctrl, BRCMNAND_UNCORR_ADDR, 0);
-	brcmnand_write_reg(ctrl, BRCMNAND_CORR_ADDR, 0);
-	brcmnand_write_reg(ctrl, BRCMNAND_UNCORR_EXT_ADDR, 0);
-	brcmnand_write_reg(ctrl, BRCMNAND_CORR_EXT_ADDR, 0);
-}
-
-static u64 brcmnand_get_uncorrecc_addr(struct brcmnand_controller *ctrl)
-{
-	u64 err_addr;
-
-	err_addr = brcmnand_read_reg(ctrl, BRCMNAND_UNCORR_ADDR);
-	err_addr |= ((u64)(brcmnand_read_reg(ctrl,
-					     BRCMNAND_UNCORR_EXT_ADDR)
-					     & 0xffff) << 32);
-
-	return err_addr;
-}
-
-static u64 brcmnand_get_correcc_addr(struct brcmnand_controller *ctrl)
-{
-	u64 err_addr;
-
-	err_addr = brcmnand_read_reg(ctrl, BRCMNAND_CORR_ADDR);
-	err_addr |= ((u64)(brcmnand_read_reg(ctrl,
-					     BRCMNAND_CORR_EXT_ADDR)
-					     & 0xffff) << 32);
-
-	return err_addr;
-}
-
-static void brcmnand_set_cmd_addr(struct mtd_info *mtd, u64 addr)
-{
-	struct nand_chip *chip =  mtd_to_nand(mtd);
-	struct brcmnand_host *host = nand_get_controller_data(chip);
-	struct brcmnand_controller *ctrl = host->ctrl;
-
-	brcmnand_write_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS,
-			   (host->cs << 16) | ((addr >> 32) & 0xffff));
-	(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS);
-	brcmnand_write_reg(ctrl, BRCMNAND_CMD_ADDRESS,
-			   lower_32_bits(addr));
-	(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS);
 }
 
 static inline u16 brcmnand_cs_offset(struct brcmnand_controller *ctrl, int cs,
@@ -960,14 +911,11 @@ static int brcmnand_hamming_ooblayout_free(struct mtd_info *mtd, int section,
 		if (!section) {
 			/*
 			 * Small-page NAND use byte 6 for BBI while large-page
-			 * NAND use bytes 0 and 1.
+			 * NAND use byte 0.
 			 */
-			if (cfg->page_size > 512) {
-				oobregion->offset += 2;
-				oobregion->length -= 2;
-			} else {
-				oobregion->length--;
-			}
+			if (cfg->page_size > 512)
+				oobregion->offset++;
+			oobregion->length--;
 		}
 	}
 
@@ -1265,12 +1213,9 @@ static void brcmnand_send_cmd(struct brcmnand_host *host, int cmd)
 {
 	struct brcmnand_controller *ctrl = host->ctrl;
 	int ret;
-	u64 cmd_addr;
 
-	cmd_addr = brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS);
-
-	dev_dbg(ctrl->dev, "send native cmd %d addr 0x%llx\n", cmd, cmd_addr);
-
+	dev_dbg(ctrl->dev, "send native cmd %d addr_lo 0x%x\n", cmd,
+		brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS));
 	BUG_ON(ctrl->cmd_pending != 0);
 	ctrl->cmd_pending = cmd;
 
@@ -1431,7 +1376,12 @@ static void brcmnand_cmdfunc(struct mtd_info *mtd, unsigned command,
 	if (!native_cmd)
 		return;
 
-	brcmnand_set_cmd_addr(mtd, addr);
+	brcmnand_write_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS,
+		(host->cs << 16) | ((addr >> 32) & 0xffff));
+	(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS);
+	brcmnand_write_reg(ctrl, BRCMNAND_CMD_ADDRESS, lower_32_bits(addr));
+	(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS);
+
 	brcmnand_send_cmd(host, native_cmd);
 	brcmnand_waitfunc(mtd, chip);
 
@@ -1651,10 +1601,20 @@ static int brcmnand_read_by_pio(struct mtd_info *mtd, struct nand_chip *chip,
 	struct brcmnand_controller *ctrl = host->ctrl;
 	int i, j, ret = 0;
 
-	brcmnand_clear_ecc_addr(ctrl);
+	/* Clear error addresses */
+	brcmnand_write_reg(ctrl, BRCMNAND_UNCORR_ADDR, 0);
+	brcmnand_write_reg(ctrl, BRCMNAND_CORR_ADDR, 0);
+	brcmnand_write_reg(ctrl, BRCMNAND_UNCORR_EXT_ADDR, 0);
+	brcmnand_write_reg(ctrl, BRCMNAND_CORR_EXT_ADDR, 0);
+
+	brcmnand_write_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS,
+			(host->cs << 16) | ((addr >> 32) & 0xffff));
+	(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS);
 
 	for (i = 0; i < trans; i++, addr += FC_BYTES) {
-		brcmnand_set_cmd_addr(mtd, addr);
+		brcmnand_write_reg(ctrl, BRCMNAND_CMD_ADDRESS,
+				   lower_32_bits(addr));
+		(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS);
 		/* SPARE_AREA_READ does not use ECC, so just use PAGE_READ */
 		brcmnand_send_cmd(host, CMD_PAGE_READ);
 		brcmnand_waitfunc(mtd, chip);
@@ -1673,16 +1633,22 @@ static int brcmnand_read_by_pio(struct mtd_info *mtd, struct nand_chip *chip,
 					mtd->oobsize / trans,
 					host->hwcfg.sector_size_1k);
 
-		if (ret != -EBADMSG) {
-			*err_addr = brcmnand_get_uncorrecc_addr(ctrl);
-
+		if (!ret) {
+			*err_addr = brcmnand_read_reg(ctrl,
+					BRCMNAND_UNCORR_ADDR) |
+				((u64)(brcmnand_read_reg(ctrl,
+						BRCMNAND_UNCORR_EXT_ADDR)
+					& 0xffff) << 32);
 			if (*err_addr)
 				ret = -EBADMSG;
 		}
 
 		if (!ret) {
-			*err_addr = brcmnand_get_correcc_addr(ctrl);
-
+			*err_addr = brcmnand_read_reg(ctrl,
+					BRCMNAND_CORR_ADDR) |
+				((u64)(brcmnand_read_reg(ctrl,
+						BRCMNAND_CORR_EXT_ADDR)
+					& 0xffff) << 32);
 			if (*err_addr)
 				ret = -EUCLEAN;
 		}
@@ -1753,7 +1719,7 @@ static int brcmnand_read(struct mtd_info *mtd, struct nand_chip *chip,
 	dev_dbg(ctrl->dev, "read %llx -> %p\n", (unsigned long long)addr, buf);
 
 try_dmaread:
-	brcmnand_clear_ecc_addr(ctrl);
+	brcmnand_write_reg(ctrl, BRCMNAND_UNCORR_COUNT, 0);
 
 	if (has_flash_dma(ctrl) && !oob && flash_dma_buf_ok(buf)) {
 		err = brcmnand_dma_trans(host, addr, buf, trans * FC_BYTES,
@@ -1797,7 +1763,7 @@ try_dmaread:
 			err = brcmstb_nand_verify_erased_page(mtd, chip, buf,
 							      addr);
 			/* erased page bitflips corrected */
-			if (err >= 0)
+			if (err > 0)
 				return err;
 		}
 
@@ -1893,9 +1859,15 @@ static int brcmnand_write(struct mtd_info *mtd, struct nand_chip *chip,
 		goto out;
 	}
 
+	brcmnand_write_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS,
+			(host->cs << 16) | ((addr >> 32) & 0xffff));
+	(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_EXT_ADDRESS);
+
 	for (i = 0; i < trans; i++, addr += FC_BYTES) {
 		/* full address MUST be set before populating FC */
-		brcmnand_set_cmd_addr(mtd, addr);
+		brcmnand_write_reg(ctrl, BRCMNAND_CMD_ADDRESS,
+				   lower_32_bits(addr));
+		(void)brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS);
 
 		if (buf) {
 			brcmnand_soc_data_bus_prepare(ctrl->soc, false);
@@ -2221,9 +2193,16 @@ static int brcmnand_setup_dev(struct brcmnand_host *host)
 	if (ctrl->nand_version >= 0x0702)
 		tmp |= ACC_CONTROL_RD_ERASED;
 	tmp &= ~ACC_CONTROL_FAST_PGM_RDIN;
-	if (ctrl->features & BRCMNAND_HAS_PREFETCH)
-		tmp &= ~ACC_CONTROL_PREFETCH;
-
+	if (ctrl->features & BRCMNAND_HAS_PREFETCH) {
+		/*
+		 * FIXME: Flash DMA + prefetch may see spurious erased-page ECC
+		 * errors
+		 */
+		if (has_flash_dma(ctrl))
+			tmp &= ~ACC_CONTROL_PREFETCH;
+		else
+			tmp |= ACC_CONTROL_PREFETCH;
+	}
 	nand_writereg(ctrl, offs, tmp);
 
 	return 0;
@@ -2622,7 +2601,7 @@ int brcmnand_remove(struct platform_device *pdev)
 	struct brcmnand_host *host;
 
 	list_for_each_entry(host, &ctrl->host_list, node)
-		nand_release(&host->chip);
+		nand_release(nand_to_mtd(&host->chip));
 
 	clk_disable_unprepare(ctrl->clk);
 

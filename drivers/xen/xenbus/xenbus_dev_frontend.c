@@ -55,7 +55,6 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/miscdevice.h>
-#include <linux/workqueue.h>
 
 #include <xen/xenbus.h>
 #include <xen/xen.h>
@@ -114,8 +113,6 @@ struct xenbus_file_priv {
 	wait_queue_head_t read_waitq;
 
 	struct kref kref;
-
-	struct work_struct wq;
 };
 
 /* Read out any raw xenbus messages queued up. */
@@ -300,14 +297,14 @@ static void watch_fired(struct xenbus_watch *watch,
 	mutex_unlock(&adap->dev_data->reply_mutex);
 }
 
-static void xenbus_worker(struct work_struct *wq)
+static void xenbus_file_free(struct kref *kref)
 {
 	struct xenbus_file_priv *u;
 	struct xenbus_transaction_holder *trans, *tmp;
 	struct watch_adapter *watch, *tmp_watch;
 	struct read_buffer *rb, *tmp_rb;
 
-	u = container_of(wq, struct xenbus_file_priv, wq);
+	u = container_of(kref, struct xenbus_file_priv, kref);
 
 	/*
 	 * No need for locking here because there are no other users,
@@ -331,18 +328,6 @@ static void xenbus_worker(struct work_struct *wq)
 		kfree(rb);
 	}
 	kfree(u);
-}
-
-static void xenbus_file_free(struct kref *kref)
-{
-	struct xenbus_file_priv *u;
-
-	/*
-	 * We might be called in xenbus_thread().
-	 * Use workqueue to avoid deadlock.
-	 */
-	u = container_of(kref, struct xenbus_file_priv, kref);
-	schedule_work(&u->wq);
 }
 
 static struct xenbus_transaction_holder *xenbus_get_transaction(
@@ -380,7 +365,7 @@ void xenbus_dev_queue_reply(struct xb_req_data *req)
 			if (WARN_ON(rc))
 				goto out;
 		}
-	} else if (req->type == XS_TRANSACTION_END) {
+	} else if (req->msg.type == XS_TRANSACTION_END) {
 		trans = xenbus_get_transaction(u, req->msg.tx_id);
 		if (WARN_ON(!trans))
 			goto out;
@@ -418,7 +403,7 @@ static int xenbus_command_reply(struct xenbus_file_priv *u,
 {
 	struct {
 		struct xsd_sockmsg hdr;
-		char body[16];
+		const char body[16];
 	} msg;
 	int rc;
 
@@ -427,7 +412,6 @@ static int xenbus_command_reply(struct xenbus_file_priv *u,
 	msg.hdr.len = strlen(reply) + 1;
 	if (msg.hdr.len > sizeof(msg.body))
 		return -E2BIG;
-	memcpy(&msg.body, reply, msg.hdr.len);
 
 	mutex_lock(&u->reply_mutex);
 	rc = queue_reply(&u->read_buffers, &msg, sizeof(msg.hdr) + msg.hdr.len);
@@ -629,7 +613,9 @@ static int xenbus_file_open(struct inode *inode, struct file *filp)
 	if (xen_store_evtchn == 0)
 		return -ENOENT;
 
-	stream_open(inode, filp);
+	nonseekable_open(inode, filp);
+
+	filp->f_mode &= ~FMODE_ATOMIC_POS; /* cdev-style semantics */
 
 	u = kzalloc(sizeof(*u), GFP_KERNEL);
 	if (u == NULL)
@@ -641,7 +627,6 @@ static int xenbus_file_open(struct inode *inode, struct file *filp)
 	INIT_LIST_HEAD(&u->watches);
 	INIT_LIST_HEAD(&u->read_buffers);
 	init_waitqueue_head(&u->read_waitq);
-	INIT_WORK(&u->wq, xenbus_worker);
 
 	mutex_init(&u->reply_mutex);
 	mutex_init(&u->msgbuffer_mutex);

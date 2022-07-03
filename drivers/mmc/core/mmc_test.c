@@ -2328,17 +2328,10 @@ static int mmc_test_reset(struct mmc_test_card *test)
 	int err;
 
 	err = mmc_hw_reset(host);
-	if (!err) {
-		/*
-		 * Reset will re-enable the card's command queue, but tests
-		 * expect it to be disabled.
-		 */
-		if (card->ext_csd.cmdq_en)
-			mmc_cmdq_disable(card);
+	if (!err)
 		return RESULT_OK;
-	} else if (err == -EOPNOTSUPP) {
+	else if (err == -EOPNOTSUPP)
 		return RESULT_UNSUP_HOST;
-	}
 
 	return RESULT_FAIL;
 }
@@ -3132,8 +3125,7 @@ static ssize_t mtf_test_write(struct file *file, const char __user *buf,
 	}
 
 #ifdef CONFIG_HIGHMEM
-	if (test->highmem)
-		__free_pages(test->highmem, BUFFER_ORDER);
+	__free_pages(test->highmem, BUFFER_ORDER);
 #endif
 	kfree(test->buffer);
 	kfree(test);

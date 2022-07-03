@@ -88,8 +88,6 @@
 #include "multicalls.h"
 #include "pmu.h"
 
-#include "../kernel/cpu/cpu.h" /* get_cpu_cap() */
-
 void *xen_initial_gdt;
 
 static int xen_cpu_up_prepare_pv(unsigned int cpu);
@@ -598,12 +596,12 @@ struct trap_array_entry {
 
 static struct trap_array_entry trap_array[] = {
 	{ debug,                       xen_xendebug,                    true },
+	{ int3,                        xen_xenint3,                     true },
 	{ double_fault,                xen_double_fault,                true },
 #ifdef CONFIG_X86_MCE
 	{ machine_check,               xen_machine_check,               true },
 #endif
-	{ nmi,                         xen_xennmi,                      true },
-	{ int3,                        xen_int3,                        false },
+	{ nmi,                         xen_nmi,                         true },
 	{ overflow,                    xen_overflow,                    false },
 #ifdef CONFIG_IA32_EMULATION
 	{ entry_INT80_compat,          xen_entry_INT80_compat,          false },
@@ -624,7 +622,7 @@ static struct trap_array_entry trap_array[] = {
 	{ simd_coprocessor_error,      xen_simd_coprocessor_error,      false },
 };
 
-static bool __ref get_trap_addr(void **addr, unsigned int ist)
+static bool get_trap_addr(void **addr, unsigned int ist)
 {
 	unsigned int nr;
 	bool ist_okay = false;
@@ -644,14 +642,6 @@ static bool __ref get_trap_addr(void **addr, unsigned int ist)
 			ist_okay = entry->ist_okay;
 			break;
 		}
-	}
-
-	if (nr == ARRAY_SIZE(trap_array) &&
-	    *addr >= (void *)early_idt_handler_array[0] &&
-	    *addr < (void *)early_idt_handler_array[NUM_EXCEPTION_VECTORS]) {
-		nr = (*addr - (void *)early_idt_handler_array[0]) /
-		     EARLY_IDT_HANDLER_SIZE;
-		*addr = (void *)xen_early_idt_handler_array[nr];
 	}
 
 	if (WARN_ON(ist != 0 && !ist_okay))
@@ -721,8 +711,8 @@ static void xen_write_idt_entry(gate_desc *dt, int entrynum, const gate_desc *g)
 	preempt_enable();
 }
 
-static unsigned xen_convert_trap_info(const struct desc_ptr *desc,
-				      struct trap_info *traps, bool full)
+static void xen_convert_trap_info(const struct desc_ptr *desc,
+				  struct trap_info *traps)
 {
 	unsigned in, out, count;
 
@@ -732,18 +722,17 @@ static unsigned xen_convert_trap_info(const struct desc_ptr *desc,
 	for (in = out = 0; in < count; in++) {
 		gate_desc *entry = (gate_desc *)(desc->address) + in;
 
-		if (cvt_gate_to_trap(in, entry, &traps[out]) || full)
+		if (cvt_gate_to_trap(in, entry, &traps[out]))
 			out++;
 	}
-
-	return out;
+	traps[out].address = 0;
 }
 
 void xen_copy_trap_info(struct trap_info *traps)
 {
 	const struct desc_ptr *desc = this_cpu_ptr(&idt_desc);
 
-	xen_convert_trap_info(desc, traps, true);
+	xen_convert_trap_info(desc, traps);
 }
 
 /* Load a new IDT into Xen.  In principle this can be per-CPU, so we
@@ -753,7 +742,6 @@ static void xen_load_idt(const struct desc_ptr *desc)
 {
 	static DEFINE_SPINLOCK(lock);
 	static struct trap_info traps[257];
-	unsigned out;
 
 	trace_xen_cpu_load_idt(desc);
 
@@ -761,8 +749,7 @@ static void xen_load_idt(const struct desc_ptr *desc)
 
 	memcpy(this_cpu_ptr(&idt_desc), desc, sizeof(idt_desc));
 
-	out = xen_convert_trap_info(desc, traps, false);
-	memset(&traps[out], 0, sizeof(traps[0]));
+	xen_convert_trap_info(desc, traps);
 
 	xen_mc_flush();
 	if (HYPERVISOR_set_trap_table(traps))
@@ -824,14 +811,15 @@ static void __init xen_write_gdt_entry_boot(struct desc_struct *dt, int entry,
 	}
 }
 
-static void xen_load_sp0(unsigned long sp0)
+static void xen_load_sp0(struct tss_struct *tss,
+			 struct thread_struct *thread)
 {
 	struct multicall_space mcs;
 
 	mcs = xen_mc_entry(0);
-	MULTI_stack_switch(mcs.mc, __KERNEL_DS, sp0);
+	MULTI_stack_switch(mcs.mc, __KERNEL_DS, thread->sp0);
 	xen_mc_issue(PARAVIRT_LAZY_CPU);
-	this_cpu_write(cpu_tss_rw.x86_tss.sp0, sp0);
+	tss->x86_tss.sp0 = thread->sp0;
 }
 
 void xen_set_iopl_mask(unsigned mask)
@@ -903,7 +891,10 @@ static u64 xen_read_msr_safe(unsigned int msr, int *err)
 	val = native_read_msr_safe(msr, err);
 	switch (msr) {
 	case MSR_IA32_APICBASE:
-		val &= ~X2APIC_ENABLE;
+#ifdef CONFIG_X86_X2APIC
+		if (!(cpuid_ecx(1) & (1 << (X86_FEATURE_X2APIC & 31))))
+#endif
+			val &= ~X2APIC_ENABLE;
 		break;
 	}
 	return val;
@@ -912,15 +903,14 @@ static u64 xen_read_msr_safe(unsigned int msr, int *err)
 static int xen_write_msr_safe(unsigned int msr, unsigned low, unsigned high)
 {
 	int ret;
-#ifdef CONFIG_X86_64
-	unsigned int which;
-	u64 base;
-#endif
 
 	ret = 0;
 
 	switch (msr) {
 #ifdef CONFIG_X86_64
+		unsigned which;
+		u64 base;
+
 	case MSR_FS_BASE:		which = SEGBASE_FS; goto set;
 	case MSR_KERNEL_GS_BASE:	which = SEGBASE_GS_USER; goto set;
 	case MSR_GS_BASE:		which = SEGBASE_GS_KERNEL; goto set;
@@ -1217,11 +1207,6 @@ static void __init xen_dom0_set_legacy_features(void)
 	x86_platform.legacy.rtc = 1;
 }
 
-static void __init xen_domu_set_legacy_features(void)
-{
-	x86_platform.legacy.rtc = 0;
-}
-
 /* First C function to be called on Xen boot */
 asmlinkage __visible void __init xen_start_kernel(void)
 {
@@ -1236,20 +1221,12 @@ asmlinkage __visible void __init xen_start_kernel(void)
 
 	xen_setup_features();
 
+	xen_setup_machphys_mapping();
+
 	/* Install Xen paravirt ops */
 	pv_info = xen_info;
 	pv_init_ops.patch = paravirt_patch_default;
 	pv_cpu_ops = xen_cpu_ops;
-	xen_init_irq_ops();
-
-	/*
-	 * Setup xen_vcpu early because it is needed for
-	 * local_irq_disable(), irqs_disabled(), e.g. in printk().
-	 *
-	 * Don't do the full vcpu_info placement stuff until we have
-	 * the cpu_possible_mask and a non-dummy shared_info.
-	 */
-	xen_vcpu_info_reset(0);
 
 	x86_platform.get_nmi_reason = xen_get_nmi_reason;
 
@@ -1261,7 +1238,6 @@ asmlinkage __visible void __init xen_start_kernel(void)
 	 * Set up some pagetable state before starting to set any ptes.
 	 */
 
-	xen_setup_machphys_mapping();
 	xen_init_mmu_ops();
 
 	/* Prevent unwanted bits from being set in PTEs. */
@@ -1273,6 +1249,9 @@ asmlinkage __visible void __init xen_start_kernel(void)
 	 */
 	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
 
+	/* Work out if we support NX */
+	x86_configure_nx();
+
 	/* Get mfn list */
 	xen_build_dynamic_phys_to_machine();
 
@@ -1282,15 +1261,7 @@ asmlinkage __visible void __init xen_start_kernel(void)
 	 */
 	xen_setup_gdt(0);
 
-	/* Work out if we support NX */
-	get_cpu_cap(&boot_cpu_data);
-	x86_configure_nx();
-
-	/* Let's presume PV guests always boot on vCPU with id 0. */
-	per_cpu(xen_vcpu_id, 0) = 0;
-
-	idt_setup_early_handler();
-
+	xen_init_irq_ops();
 	xen_init_capabilities();
 
 #ifdef CONFIG_X86_LOCAL_APIC
@@ -1324,6 +1295,18 @@ asmlinkage __visible void __init xen_start_kernel(void)
 	 */
 	acpi_numa = -1;
 #endif
+	/* Let's presume PV guests always boot on vCPU with id 0. */
+	per_cpu(xen_vcpu_id, 0) = 0;
+
+	/*
+	 * Setup xen_vcpu early because start_kernel needs it for
+	 * local_irq_disable(), irqs_disabled().
+	 *
+	 * Don't do the full vcpu_info placement stuff until we have
+	 * the cpu_possible_mask and a non-dummy shared_info.
+	 */
+	xen_vcpu_info_reset(0);
+
 	WARN_ON(xen_cpuhp_setup(xen_cpu_up_prepare_pv, xen_cpu_dead_pv));
 
 	local_irq_disable();
@@ -1383,8 +1366,6 @@ asmlinkage __visible void __init xen_start_kernel(void)
 		add_preferred_console("hvc", 0, NULL);
 		if (pci_xen)
 			x86_init.pci.arch_init = pci_xen_init;
-		x86_platform.set_legacy_features =
-				xen_domu_set_legacy_features;
 	} else {
 		const struct dom0_vga_console_info *info =
 			(void *)((char *)xen_start_info +
@@ -1414,15 +1395,6 @@ asmlinkage __visible void __init xen_start_kernel(void)
 		x86_init.mpparse.get_smp_config = x86_init_uint_noop;
 
 		xen_boot_params_init_edd();
-
-#ifdef CONFIG_ACPI
-		/*
-		 * Disable selecting "Firmware First mode" for correctable
-		 * memory errors, as this is the duty of the hypervisor to
-		 * decide.
-		 */
-		acpi_disable_cmcff = 1;
-#endif
 	}
 #ifdef CONFIG_PCI
 	/* PCI BIOS service won't work from a PV guest. */
@@ -1488,9 +1460,9 @@ static uint32_t __init xen_platform_pv(void)
 	return 0;
 }
 
-const __initconst struct hypervisor_x86 x86_hyper_xen_pv = {
+const struct hypervisor_x86 x86_hyper_xen_pv = {
 	.name                   = "Xen PV",
 	.detect                 = xen_platform_pv,
-	.type			= X86_HYPER_XEN_PV,
-	.runtime.pin_vcpu       = xen_pin_vcpu,
+	.pin_vcpu               = xen_pin_vcpu,
 };
+EXPORT_SYMBOL(x86_hyper_xen_pv);

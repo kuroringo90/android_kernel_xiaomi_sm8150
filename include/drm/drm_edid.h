@@ -115,7 +115,7 @@ struct detailed_data_monitor_range {
 			u8 supported_scalings;
 			u8 preferred_refresh;
 		} __attribute__((packed)) cvt;
-	} __attribute__((packed)) formula;
+	} formula;
 } __attribute__((packed));
 
 struct detailed_data_wpindex {
@@ -148,7 +148,7 @@ struct detailed_non_pixel {
 		struct detailed_data_wpindex color;
 		struct std_timing timings[6];
 		struct cvt_timing cvt[4];
-	} __attribute__((packed)) data;
+	} data;
 } __attribute__((packed));
 
 #define EDID_DETAIL_EST_TIMINGS 0xf7
@@ -166,7 +166,7 @@ struct detailed_timing {
 	union {
 		struct detailed_pixel_timing pixel_data;
 		struct detailed_non_pixel other_data;
-	} __attribute__((packed)) data;
+	} data;
 } __attribute__((packed));
 
 #define DRM_EDID_INPUT_SERRATION_VSYNC (1 << 0)
@@ -214,9 +214,9 @@ struct detailed_timing {
 #define DRM_EDID_HDMI_DC_Y444             (1 << 3)
 
 /* YCBCR 420 deep color modes */
-#define DRM_EDID_YCBCR420_DC_48		  (1 << 2)
-#define DRM_EDID_YCBCR420_DC_36		  (1 << 1)
-#define DRM_EDID_YCBCR420_DC_30		  (1 << 0)
+#define DRM_EDID_YCBCR420_DC_48		  (1 << 6)
+#define DRM_EDID_YCBCR420_DC_36		  (1 << 5)
+#define DRM_EDID_YCBCR420_DC_30		  (1 << 4)
 #define DRM_EDID_YCBCR420_DC_MASK (DRM_EDID_YCBCR420_DC_48 | \
 				    DRM_EDID_YCBCR420_DC_36 | \
 				    DRM_EDID_YCBCR420_DC_30)
@@ -278,11 +278,6 @@ struct detailed_timing {
 #define DRM_ELD_MONITOR_NAME_STRING	20	/* offsets 20..(20+mnl-1) inclusive */
 
 #define DRM_ELD_CEA_SAD(mnl, sad)	(20 + (mnl) + 3 * (sad))
-
-/* HDMI 2.0 */
-#define DRM_EDID_3D_INDEPENDENT_VIEW	(1 << 2)
-#define DRM_EDID_3D_DUAL_VIEW		(1 << 1)
-#define DRM_EDID_3D_OSD_DISPARITY	(1 << 0)
 
 struct edid {
 	u8 header[8];

@@ -77,7 +77,7 @@ static long clk_fd_round_rate(struct clk_hw *hw, unsigned long rate,
 	unsigned long m, n;
 	u64 ret;
 
-	if (!rate || (!clk_hw_can_set_rate_parent(hw) && rate >= *parent_rate))
+	if (!rate || rate >= *parent_rate)
 		return *parent_rate;
 
 	if (fd->approximation)
@@ -134,7 +134,7 @@ struct clk_hw *clk_hw_register_fractional_divider(struct device *dev,
 		u8 clk_divider_flags, spinlock_t *lock)
 {
 	struct clk_fractional_divider *fd;
-	struct clk_init_data init = {};
+	struct clk_init_data init;
 	struct clk_hw *hw;
 	int ret;
 

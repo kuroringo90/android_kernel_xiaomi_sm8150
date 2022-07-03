@@ -5,13 +5,6 @@
 #include <linux/compiler.h>
 #include <linux/types.h>
 
-/* Built-in __init functions needn't be compiled with retpoline */
-#if defined(__noretpoline) && !defined(MODULE)
-#define __noinitretpoline __noretpoline
-#else
-#define __noinitretpoline
-#endif
-
 /* These macros are used to mark some functions or 
  * initialized data (doesn't apply to uninitialized data)
  * as `initialization' functions. The kernel can take this
@@ -47,7 +40,7 @@
 
 /* These are for everybody (although not all archs will actually
    discard it in modules) */
-#define __init		__section(.init.text) __cold __inittrace __latent_entropy __noinitretpoline __nocfi
+#define __init		__section(.init.text) __cold __inittrace __latent_entropy
 #define __initdata	__section(.init.data)
 #define __initconst	__section(.init.rodata)
 #define __exitdata	__section(.exit.data)
@@ -133,10 +126,6 @@ extern unsigned int reset_devices;
 /* used by init/main.c */
 void setup_arch(char **);
 void prepare_namespace(void);
-void launch_early_services(void);
-#ifdef CONFIG_EARLY_SERVICES
-int get_early_services_status(void);
-#endif
 void __init load_default_modules(void);
 int __init init_rootfs(void);
 
@@ -172,33 +161,10 @@ extern bool initcall_debug;
  * and remove that completely, so the initcall sections have to be marked
  * as KEEP() in the linker script.
  */
-#ifdef CONFIG_LTO_CLANG
-  /*
-   * With LTO, the compiler doesn't necessarily obey link order for
-   * initcalls, and the initcall variable needs to be globally unique
-   * to avoid naming collisions.  In order to preserve the correct
-   * order, we add each variable into its own section and generate a
-   * linker script (in scripts/link-vmlinux.sh) to ensure the order
-   * remains correct.  We also add a __COUNTER__ prefix to the name,
-   * so we can retain the order of initcalls within each compilation
-   * unit, and __LINE__ to make the names more unique.
-   */
-  #define ___lto_initcall(c, l, fn, id, __sec) \
-	static initcall_t __initcall_##c##_##l##_##fn##id __used \
-		__attribute__((__section__( #__sec \
-			__stringify(.init..##c##_##l##_##fn)))) = fn;
-  #define __lto_initcall(c, l, fn, id, __sec) \
-	___lto_initcall(c, l, fn, id, __sec)
 
-  #define ___define_initcall(fn, id, __sec) \
-	__lto_initcall(__COUNTER__, __LINE__, fn, id, __sec)
-#else
-  #define ___define_initcall(fn, id, __sec) \
+#define __define_initcall(fn, id) \
 	static initcall_t __initcall_##fn##id __used \
-		__attribute__((__section__(#__sec ".init"))) = fn;
-#endif
-
-#define __define_initcall(fn, id) ___define_initcall(fn, id, .initcall##id)
+	__attribute__((__section__(".initcall" #id ".init"))) = fn;
 
 /*
  * Early initcalls run before initializing SMP.
@@ -237,8 +203,13 @@ extern bool initcall_debug;
 #define __exitcall(fn)						\
 	static exitcall_t __exitcall_##fn __exit_call = fn
 
-#define console_initcall(fn)	___define_initcall(fn, con, .con_initcall)
-#define security_initcall(fn)	___define_initcall(fn, security, .security_initcall)
+#define console_initcall(fn)					\
+	static initcall_t __initcall_##fn			\
+	__used __section(.con_initcall.init) = fn
+
+#define security_initcall(fn)					\
+	static initcall_t __initcall_##fn			\
+	__used __section(.security_initcall.init) = fn
 
 struct obs_kernel_param {
 	const char *str;
@@ -301,8 +272,6 @@ void __init parse_early_options(char *cmdline);
 
 /* Data marked not to be saved by software suspend */
 #define __nosavedata __section(.data..nosave)
-
-#define __rticdata  __attribute__((section(".bss.rtic")))
 
 #ifdef MODULE
 #define __exit_p(x) x

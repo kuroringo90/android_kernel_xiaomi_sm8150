@@ -85,9 +85,7 @@ struct aq_hw_ops {
 	void (*destroy)(struct aq_hw_s *self);
 
 	int (*get_hw_caps)(struct aq_hw_s *self,
-			   struct aq_hw_caps_s *aq_hw_caps,
-			   unsigned short device,
-			   unsigned short subsystem_device);
+			   struct aq_hw_caps_s *aq_hw_caps);
 
 	int (*hw_ring_tx_xmit)(struct aq_hw_s *self, struct aq_ring_s *aq_ring,
 			       unsigned int frags);

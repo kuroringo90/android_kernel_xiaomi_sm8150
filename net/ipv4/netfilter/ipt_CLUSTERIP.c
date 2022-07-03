@@ -107,6 +107,12 @@ clusterip_config_entry_put(struct net *net, struct clusterip_config *c)
 
 	local_bh_disable();
 	if (refcount_dec_and_lock(&c->entries, &cn->lock)) {
+		list_del_rcu(&c->list);
+		spin_unlock(&cn->lock);
+		local_bh_enable();
+
+		unregister_netdevice_notifier(&c->notifier);
+
 		/* In case anyone still accesses the file, the open/close
 		 * functions are also incrementing the refcount on their own,
 		 * so it's safe to remove the entry even if it's in use. */
@@ -114,12 +120,6 @@ clusterip_config_entry_put(struct net *net, struct clusterip_config *c)
 		if (cn->procdir)
 			proc_remove(c->pde);
 #endif
-		list_del_rcu(&c->list);
-		spin_unlock(&cn->lock);
-		local_bh_enable();
-
-		unregister_netdevice_notifier(&c->notifier);
-
 		return;
 	}
 	local_bh_enable();
@@ -228,6 +228,7 @@ clusterip_config_init(struct net *net, const struct ipt_clusterip_tgt_info *i,
 	c->hash_mode = i->hash_mode;
 	c->hash_initval = i->hash_initval;
 	refcount_set(&c->refcount, 1);
+	refcount_set(&c->entries, 1);
 
 	spin_lock_bh(&cn->lock);
 	if (__clusterip_config_find(net, ip)) {
@@ -258,10 +259,8 @@ clusterip_config_init(struct net *net, const struct ipt_clusterip_tgt_info *i,
 
 	c->notifier.notifier_call = clusterip_netdev_event;
 	err = register_netdevice_notifier(&c->notifier);
-	if (!err) {
-		refcount_set(&c->entries, 1);
+	if (!err)
 		return c;
-	}
 
 #ifdef CONFIG_PROC_FS
 	proc_remove(c->pde);
@@ -270,7 +269,7 @@ err:
 	spin_lock_bh(&cn->lock);
 	list_del_rcu(&c->list);
 	spin_unlock_bh(&cn->lock);
-	clusterip_config_put(c);
+	kfree(c);
 
 	return ERR_PTR(err);
 }
@@ -432,7 +431,7 @@ static int clusterip_tg_check(const struct xt_tgchk_param *par)
 	struct ipt_clusterip_tgt_info *cipinfo = par->targinfo;
 	const struct ipt_entry *e = par->entryinfo;
 	struct clusterip_config *config;
-	int ret, i;
+	int ret;
 
 	if (par->nft_compat) {
 		pr_err("cannot use CLUSTERIP target from nftables compat\n");
@@ -451,18 +450,8 @@ static int clusterip_tg_check(const struct xt_tgchk_param *par)
 		pr_info("Please specify destination IP\n");
 		return -EINVAL;
 	}
-	if (cipinfo->num_local_nodes > ARRAY_SIZE(cipinfo->local_nodes)) {
-		pr_info("bad num_local_nodes %u\n", cipinfo->num_local_nodes);
-		return -EINVAL;
-	}
-	for (i = 0; i < cipinfo->num_local_nodes; i++) {
-		if (cipinfo->local_nodes[i] - 1 >=
-		    sizeof(config->local_nodes) * 8) {
-			pr_info("bad local_nodes[%d] %u\n",
-				i, cipinfo->local_nodes[i]);
-			return -EINVAL;
-		}
-	}
+
+	/* FIXME: further sanity checks */
 
 	config = clusterip_config_find_get(par->net, e->ip.dst.s_addr, 1);
 	if (!config) {
@@ -492,17 +481,13 @@ static int clusterip_tg_check(const struct xt_tgchk_param *par)
 			if (IS_ERR(config))
 				return PTR_ERR(config);
 		}
-	} else if (memcmp(&config->clustermac, &cipinfo->clustermac, ETH_ALEN))
-		return -EINVAL;
+	}
+	cipinfo->config = config;
 
 	ret = nf_ct_netns_get(par->net, par->family);
-	if (ret < 0) {
+	if (ret < 0)
 		pr_info("cannot load conntrack support for proto=%u\n",
 			par->family);
-		clusterip_config_entry_put(par->net, config);
-		clusterip_config_put(config);
-		return ret;
-	}
 
 	if (!par->net->xt.clusterip_deprecated_warning) {
 		pr_info("ipt_CLUSTERIP is deprecated and it will removed soon, "
@@ -510,7 +495,6 @@ static int clusterip_tg_check(const struct xt_tgchk_param *par)
 		par->net->xt.clusterip_deprecated_warning = true;
 	}
 
-	cipinfo->config = config;
 	return ret;
 }
 

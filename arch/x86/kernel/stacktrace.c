@@ -98,7 +98,7 @@ static int __save_stack_trace_reliable(struct stack_trace *trace,
 	for (unwind_start(&state, task, NULL, NULL); !unwind_done(&state);
 	     unwind_next_frame(&state)) {
 
-		regs = unwind_get_entry_regs(&state, NULL);
+		regs = unwind_get_entry_regs(&state);
 		if (regs) {
 			/*
 			 * Kernel mode registers on the stack indicate an
@@ -160,12 +160,8 @@ int save_stack_trace_tsk_reliable(struct task_struct *tsk,
 {
 	int ret;
 
-	/*
-	 * If the task doesn't have a stack (e.g., a zombie), the stack is
-	 * "reliably" empty.
-	 */
 	if (!try_get_task_stack(tsk))
-		return 0;
+		return -EINVAL;
 
 	ret = __save_stack_trace_reliable(trace, tsk);
 

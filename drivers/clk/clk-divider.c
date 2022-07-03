@@ -118,11 +118,12 @@ static unsigned int _get_val(const struct clk_div_table *table,
 unsigned long divider_recalc_rate(struct clk_hw *hw, unsigned long parent_rate,
 				  unsigned int val,
 				  const struct clk_div_table *table,
-				  unsigned long flags, unsigned long width)
+				  unsigned long flags)
 {
+	struct clk_divider *divider = to_clk_divider(hw);
 	unsigned int div;
 
-	div = _get_div(table, val, flags, width);
+	div = _get_div(table, val, flags, divider->width);
 	if (!div) {
 		WARN(!(flags & CLK_DIVIDER_ALLOW_ZERO),
 			"%s: Zero divisor and CLK_DIVIDER_ALLOW_ZERO not set\n",
@@ -144,7 +145,7 @@ static unsigned long clk_divider_recalc_rate(struct clk_hw *hw,
 	val &= div_mask(divider->width);
 
 	return divider_recalc_rate(hw, parent_rate, val, divider->table,
-				   divider->flags, divider->width);
+				   divider->flags);
 }
 
 static bool _is_valid_table_div(const struct clk_div_table *table,
@@ -257,9 +258,6 @@ static bool _is_best_div(unsigned long rate, unsigned long now,
 {
 	if (flags & CLK_DIVIDER_ROUND_CLOSEST)
 		return abs(rate - now) < abs(rate - best);
-	else if (flags & CLK_DIVIDER_ROUND_KHZ)
-		return (DIV_ROUND_CLOSEST(abs(rate - now), 1000)
-			< DIV_ROUND_CLOSEST(abs(rate - best), 1000));
 
 	return now <= rate && now > best;
 }
@@ -286,9 +284,6 @@ static int clk_divider_bestdiv(struct clk_hw *hw, struct clk_hw *parent,
 	int i, bestdiv = 0;
 	unsigned long parent_rate, best = 0, now, maxdiv;
 	unsigned long parent_rate_saved = *best_parent_rate;
-
-	if (!hw || !parent)
-		return -EINVAL;
 
 	if (!rate)
 		rate = 1;
@@ -442,7 +437,7 @@ static struct clk_hw *_register_divider(struct device *dev, const char *name,
 {
 	struct clk_divider *div;
 	struct clk_hw *hw;
-	struct clk_init_data init = {};
+	struct clk_init_data init;
 	int ret;
 
 	if (clk_divider_flags & CLK_DIVIDER_HIWORD_MASK) {
