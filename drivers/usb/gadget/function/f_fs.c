@@ -1673,8 +1673,13 @@ ffs_fs_mount(struct file_system_type *t, int flags,
 		return ERR_PTR(ret);
 
 	ffs = ffs_data_new(dev_name);
-	if (unlikely(!ffs))
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR_OR_NULL(ffs)) {
+		if (!ffs)
+			return ERR_PTR(-ENOMEM);
+		else
+			return ERR_PTR((long) ffs);
+	}
+
 	ffs->file_perms = data.perms;
 	ffs->no_disconnect = data.no_disconnect;
 
@@ -2066,7 +2071,6 @@ static void ffs_epfiles_destroy(struct ffs_epfile *epfiles, unsigned count)
 
 static void ffs_func_eps_disable(struct ffs_function *func)
 {
-	struct ffs_data *ffs;
 	struct ffs_ep *ep;
 	struct ffs_data *ffs      = func->ffs;
 	struct ffs_epfile *epfile;
@@ -2079,7 +2083,6 @@ static void ffs_func_eps_disable(struct ffs_function *func)
 	spin_lock_irqsave(&func->ffs->eps_lock, flags);
 	count = func->ffs->eps_count;
 	epfile = func->ffs->epfiles;
-	ffs = func->ffs;
 	ep = func->eps;
 	while (count--) {
 		/* pending requests get nuked */
