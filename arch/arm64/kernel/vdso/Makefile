@@ -10,7 +10,6 @@ obj-vdso-s := note.o sigreturn.o
 obj-vdso-c := vgettimeofday.o
 
 # Build rules
-<<<<<<< HEAD
 targets := $(obj-vdso-s) $(obj-vdso-c) vdso.so vdso.so.dbg
 obj-vdso-s := $(addprefix $(obj)/, $(obj-vdso-s))
 obj-vdso-c := $(addprefix $(obj)/, $(obj-vdso-c))
